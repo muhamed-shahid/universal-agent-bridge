@@ -90,13 +90,88 @@ export interface AgentDefinition {
   readonly instructions: AgentInstructions;
   /** Free-text notes about known limitations, shown in status output. */
   readonly notes?: readonly string[];
-  /** Present once the agent can run tasks (Phase 4 onwards). */
+  /** Present once the agent can run tasks. */
   readonly execution?: AgentExecution;
 }
 
-/** Placeholder for the execution contract defined in Phase 4. */
+/** How a task may affect the project. Derived from the task kind, never from the prompt. */
+export type TaskMode = 'read_only' | 'workspace_write';
+
+/** User settings for an agent, from the UAB config (`agents.<id>`). */
+export interface AgentSettings {
+  /** Native agent/profile name (Kiro `--agent`, OpenCode `--agent`). */
+  readonly profile?: string | undefined;
+  readonly model?: string | undefined;
+  /** Native, scoped permission rules to pre-approve for write tasks (Claude `--allowedTools`). */
+  readonly allowTools?: readonly string[] | undefined;
+}
+
+export interface InvocationRequest {
+  /** The exact text the user approved. Sent on stdin. */
+  readonly prompt: string;
+  /** Canonical project directory. The process runs here. */
+  readonly cwd: string;
+  readonly mode: TaskMode;
+  /** Native conversation to continue, or null to start a new one. */
+  readonly nativeSessionId: string | null;
+  /** A fresh UUID the adapter may use when the CLI lets the caller choose the session id. */
+  readonly newSessionId: string;
+  readonly settings: AgentSettings;
+}
+
+export interface Invocation {
+  readonly args: readonly string[];
+  readonly stdin: string;
+  /** Set when the session id is known before the run (caller-chosen). */
+  readonly nativeSessionId?: string;
+}
+
+export type AgentEvent =
+  | { readonly type: 'session'; readonly nativeSessionId: string }
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'final'; readonly text: string; readonly success: boolean | null }
+  | {
+      readonly type: 'tool';
+      readonly name: string;
+      readonly status: string;
+      readonly path?: string;
+    }
+  | { readonly type: 'permission_denied'; readonly tool: string }
+  | { readonly type: 'error'; readonly message: string; readonly fatal?: boolean };
+
+/** Execution hooks. Pure functions: the execution manager spawns and supervises the process. */
 export interface AgentExecution {
   readonly supported: true;
+  /** False when the integration was built from documentation and not run against the real CLI. */
+  readonly verified: boolean;
+  buildInvocation(req: InvocationRequest): Invocation;
+  parseStdoutLine(line: string): AgentEvent[];
+  parseStderrLine?(line: string): AgentEvent[];
+  /** Shown when the run fails in a way that usually means setup is missing. */
+  readonly setupHint?: string;
+}
+
+export function parseJsonLine(line: string): Record<string, unknown> | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 /** Shared version parser: first `x.y.z` (with optional pre-release) in stdout. */

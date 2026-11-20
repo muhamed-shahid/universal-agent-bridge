@@ -154,8 +154,11 @@ describe('built-in definitions', () => {
     }
   });
 
-  it('do not claim task execution yet (Phase 4+)', () => {
-    expect(BUILTIN_AGENTS.every((d) => d.execution === undefined)).toBe(true);
+  it('all have execution adapters; only Kiro is marked as verified against the real CLI', () => {
+    expect(BUILTIN_AGENTS.every((d) => d.execution?.supported === true)).toBe(true);
+    expect(BUILTIN_AGENTS.filter((d) => d.execution?.verified === true).map((d) => d.id)).toEqual([
+      'kiro',
+    ]);
   });
 
   it('only use read-only status commands as probes', () => {

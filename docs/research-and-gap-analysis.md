@@ -1,6 +1,7 @@
 # Research and gap analysis
 
-Status: Phase 1 output. Research date: 2026-11-20. Everything below was checked against
+Status: research done before implementation (2026-11-20). Findings later verified in practice
+are marked **Verified**. Research date: 2026-11-20. Everything below was checked against
 the sources linked in each section on that date. ChatGPT, Codex and the coding CLIs change
 often, so each later phase must re-verify the parts it depends on.
 
@@ -113,7 +114,7 @@ Sources: local `--help` output; <https://kiro.dev/docs/cli/headless/>;
 1. **Kiro headless authentication.** The Kiro headless docs say headless mode requires
    `KIRO_API_KEY`, which is only available on Pro, Pro+, Pro Max and Power plans. It is not
    yet verified whether `--no-interactive` also works with a normal interactive login on
-   2.27.1. Phase 4 must test this manually. UAB will not ask for or store the key. If the key
+   2.27.1. **Verified:** a normal `kiro-cli login` is enough for headless runs. UAB will not ask for or store the key. If the key
    is required, the user sets it in their own environment.
 2. **Kiro trust bug.** kirodotdev/Kiro#12037: an empty `--trust-tools=` trusts tools instead of
    none and lets writes escape `allowedPaths`. The Kiro adapter must never emit an empty
@@ -192,7 +193,7 @@ UAB supports two approval channels, selected in configuration:
 | Channel           | How the human approves                                                                                                                                                                                                | Guarantee                                                                        |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `local` (default) | The human runs `uab approve <task-id>` in a terminal, or uses a future local console. The command shows the full prompt and its hash first. The MCP `approve_task` tool refuses and returns the exact command to run. | Strong: only someone with access to the local terminal can approve.              |
-| `chat` (opt-in)   | ChatGPT calls `approve_task` with the task id **and the prompt hash shown to the user**. The README tells users to set `tools.approve_task.approval_mode = "approve"` so ChatGPT asks them every time.                | Weaker: UAB depends on the host's prompt and the user's config, and must say so. |
+| `chat` (opt-in)   | ChatGPT calls `approve_task` with the task id **and the prompt hash shown to the user**. The README tells users to set `tools.approve_task.approval_mode = "prompt"` so ChatGPT asks them every time.                 | Weaker: UAB depends on the host's prompt and the user's config, and must say so. |
 
 In both channels the approval record is bound to the session id, task id, agent id, the
 canonical project path, the SHA-256 of the exact prompt, the prompt version and an expiry time.

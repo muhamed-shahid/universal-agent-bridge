@@ -1,8 +1,30 @@
 # Supported agents
 
-Status: Phase 3. UAB **detects** these coding CLIs and checks their login. It cannot run tasks
-with any of them yet; task execution arrives per agent in Phases 4 (Kiro), 8 (Claude Code),
-9 (OpenCode) and 10 (Codex).
+UAB detects these coding CLIs, checks their login and runs approved tasks with them.
+
+| Agent       | Task execution | Verified end to end                                                                                                     |
+| ----------- | -------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Kiro CLI    | yes            | **yes**: Kiro CLI 2.27.1, Windows 11 (file created inside the project, write to `../` refused by Kiro, session resumed) |
+| Claude Code | yes            | no: stream-json format and the 401 retry event checked against 2.1.220; no successful run (the test key was rejected)   |
+| OpenCode    | yes            | no: error events and stdin prompt checked against 1.19.3; no successful run (the test account had no credit)            |
+| Codex CLI   | yes            | no: built from the Codex non-interactive documentation; Codex was not installed                                         |
+
+## How tasks run
+
+Every run starts the CLI directly (no shell) in the registered project directory, with the
+prompt on stdin, a filtered environment, a timeout and output limits. The task kind decides the
+mode: `review`, `summarize` and `diagnose` are **read-only**; `implement`, `fix` and `test` may
+change files inside the project.
+
+| Agent       | Read-only task                                                                                            | Write task                                                      | Continue a conversation                |
+| ----------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------- |
+| Kiro CLI    | `kiro-cli chat --no-interactive --output-format stream-json --agent uab-read`                             | same with `--agent uab-write`                                   | `--resume-id <id>`                     |
+| Claude Code | `claude -p --output-format stream-json --verbose --permission-mode dontAsk --allowedTools=Read,Grep,Glob` | `--permission-mode acceptEdits` plus `agents.claude.allowTools` | `--session-id` (new) / `--resume <id>` |
+| OpenCode    | `opencode run --format json --dir <project> --agent plan`                                                 | default agent or `agents.opencode.profile`                      | `--session <id>`                       |
+| Codex CLI   | `codex exec --json --sandbox read-only -`                                                                 | `--sandbox workspace-write`                                     | `codex exec resume <id>`               |
+
+Each UAB session keeps one native conversation per agent. Switching agents never passes one
+agent's conversation to another. `propose_task` with `freshAgentSession: true` starts a new one.
 
 Check what UAB sees on your machine:
 
@@ -63,9 +85,14 @@ describes. `uab agents status` shows only whether the variable is set.
 Never passed by UAB: `--trust-all-tools`, `-a`, and `--trust-tools` with an empty or wildcard
 list. An empty `--trust-tools=` trusts all tools in some versions (kirodotdev/Kiro#12037).
 
-Known limitation: Kiro's [headless documentation](https://kiro.dev/docs/cli/headless/) says
-non-interactive runs authenticate with `KIRO_API_KEY`, available on Pro plans and above.
-Phase 4 verifies whether a normal interactive login is enough.
+Kiro's [headless documentation](https://kiro.dev/docs/cli/headless/) mentions `KIRO_API_KEY`.
+Verified with 2.27.1: a normal `kiro-cli login` is enough; the key is optional.
+
+**Setup:** run `uab agents setup kiro` once. It writes `~/.kiro/agents/uab-read.json` and
+`uab-write.json`. Both pre-approve no tools and limit file access to `./**` (the project
+directory); headless Kiro denies anything else (shell, web, AWS, paths outside the project).
+In a verified run Kiro created a file in the project and refused `../outside.txt`. Use
+`agents.kiro.profile` to run your own Kiro agent instead.
 
 ## Claude Code (`claude`)
 
@@ -96,9 +123,14 @@ Never passed by UAB: `--dangerously-skip-permissions`, `--allow-dangerously-skip
 
 Never passed by UAB: `--auto`.
 
+**Permissions:** OpenCode's own `permission` settings apply. Its default agent may edit files and
+run commands without asking, so configure `permission` (for example ask for shell commands)
+before running write tasks.
+
 Known limitations: providers configured only through environment variables (no stored
 credential) are reported as not authenticated. The current OpenCode docs describe V2
-(`@opencode/cli`), which changes the permission configuration format; Phase 9 verifies both.
+(`@opencode/cli`), which changes the permission configuration format; the adapter was checked
+against V1 (1.19.3) only.
 
 ## Codex CLI (`codex`)
 
@@ -124,7 +156,8 @@ In the UAB config file (`uab config` shows its location):
 {
   "agents": {
     "codex": { "enabled": false },
-    "claude": { "executable": "C:\\Tools\\claude\\claude.exe" }
+    "claude": { "executable": "C:\\Tools\\claude\\claude.exe", "allowTools": ["Bash(npm test:*)"] },
+    "kiro": { "profile": "uab-write", "model": "claude-sonnet-4" }
   }
 }
 ```

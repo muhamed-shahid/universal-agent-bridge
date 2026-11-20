@@ -1,0 +1,23 @@
+name: Feature request or new agent
+description: Suggest an improvement or support for another coding CLI
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that UAB does not support?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work. For a new agent, link its documentation for headless runs, output format, session resume and permission settings.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - label: This keeps human approval for every task and the agent's own permissions enabled.
+          required: true

@@ -4,55 +4,48 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.0] - 2026-11-20
 
-### Added in Phase 3
+First release. Verified end to end with Kiro CLI 2.27.1 on Windows 11.
 
-- Agent definition contract (`src/agents/types.ts`) and `AgentRegistry`: detection of installed
-  coding CLIs, version, and login status from each CLI's own status command, with states
-  `ready`, `not_installed`, `not_authenticated`, `auth_unknown`, `disabled` and `error`.
-- Built-in definitions for Kiro CLI, Claude Code, OpenCode and Codex CLI (detection only),
-  with install and login guidance from each vendor's documentation.
-- Per-agent deny lists of arguments that weaken native permission checks, and
-  `assertSafeArgs` to enforce them.
-- Bounded process runner: no shell, explicit environment allowlist, stdin input, output caps,
-  timeout and abort that kill the whole process tree.
-- Windows program resolution that unwraps npm `.cmd` wrappers instead of running `cmd.exe`,
-  and ignores relative `PATH` entries.
-- CLI: `uab agents list`, `uab agents status [<agent>] [--json]`.
-- Config section `agents.<id>.enabled|executable`; sessions accept only enabled agents.
-- Error codes `AGENT_DEFINITION_INVALID`, `FORBIDDEN_AGENT_ARGUMENT`.
-- `docs/supported-agents.md`; mock CLI fixture for tests.
+### Added
 
-### Added in Phase 2
+- **MCP server** (`uab mcp`, stdio) for the ChatGPT desktop app with 31 tools for sessions,
+  agents, read-only project inspection, tasks, approvals and results, and server instructions
+  that mark agent output as untrusted. No shell or file-write tool.
+- `uab mcp-config` generates the `[mcp_servers.uab]` block for `~/.codex/config.toml`.
+- **Tasks and approvals**: immutable prompt versions with a fixed rules header, SHA-256 binding,
+  single-use expiring approvals, reject / request changes / revise, local approval by default
+  (`uab approve`) and opt-in chat approval, append-only audit log.
+- **Execution manager**: background runs, prompt on stdin, no shell, timeouts, cancel with
+  process-tree kill, one writer per working tree, crash recovery (`interrupted`, never
+  restarted), redacted and capped output, resume of native agent conversations per session.
+- **Results**: final message, agent-reported success, permission denials, errors, changed files
+  (with pre-existing changes marked), diff stat, commits created, and UAB's own verification
+  command (`uab project set-test`) with test summary parsing.
+- **Agent execution adapters** for Kiro CLI (verified), Claude Code, OpenCode and Codex CLI;
+  `uab agents setup kiro` installs project-confined Kiro profiles.
+- Secret redaction and sensitive-file filtering for logs, results and diffs.
+- CLI: `pending`, `approve`, `reject`, `request-changes`, `tasks`, `task show|run|result|logs|cancel`,
+  `audit`, `project set-test|clear-test`, `agents setup kiro`, `mcp`, `mcp-config`.
+- Config: `agents.<id>.profile|model|allowTools`, `execution.verifyTimeoutMinutes`.
+- Docs: complete README, `docs/security.md`, `docs/troubleshooting.md`, updated
+  `docs/supported-agents.md` and `docs/architecture.md`; `CONTRIBUTING.md`, `SECURITY.md`,
+  issue and pull request templates.
 
-- Phase 2: SQLite database (`node:sqlite`, WAL) with numbered, checksummed migrations, a backup
-  before each upgrade, and refusal to open newer or modified schemas.
-- Project registration with path validation: absolute, existing directories only; symlinks,
-  junctions and letter case resolved; home directory, filesystem roots, UNC/device paths and
-  the UAB data directory refused.
-- Project-relative path guard with symlink-aware containment checks (for later inspection
-  tools).
-- Session manager: create, list, get, resume, close, switch agent and history, each session
-  bound to one project and protected by a token stored only as a SHA-256 hash.
-- CLI commands: `project add|list|remove`, `session create|list|show|history|close|rotate-token`,
-  `db status|backup`.
-- Config setting `projects.allowMcpRegistration` (default `false`).
-- Error codes `DATABASE_ERROR`, `DATABASE_MIGRATION_FAILED`, `DATABASE_SCHEMA_MISMATCH`,
-  `DATABASE_TOO_NEW`, `PROJECT_NOT_FOUND`, `PROJECT_IN_USE`.
-- `docs/development.md`.
+### Phase 3
 
-### Changed
+- Agent definition contract and registry: detection, version and native login status.
+- Bounded process runner and Windows npm wrapper resolution; per-agent forbidden flags.
+- `uab agents list|status`, config `agents.<id>.enabled|executable`.
 
-- Continuing a session in a new conversation uses `uab session rotate-token` (the design
-  previously named `uab session token`, which cannot work because only the token hash is
-  stored).
+### Phase 2
 
-### Added in Phase 1
+- SQLite database with checksummed migrations and automatic backups.
+- Project registration with symlink-aware path validation.
+- Sessions bound to one project and agent, protected by hashed tokens; `uab session …`.
 
-- Research and gap analysis (`docs/research-and-gap-analysis.md`) and architecture
-  (`docs/architecture.md`).
-- Project foundation: TypeScript, ESLint, Prettier, Vitest, GitHub Actions CI.
-- Core modules: validated configuration (`src/core/config.ts`), error codes
-  (`src/core/errors.ts`), data-directory resolution (`src/core/paths.ts`), stderr logger.
-- `uab` CLI with `config`, `help` and `--version`.
+### Phase 1
+
+- Research and gap analysis, architecture, project foundation (TypeScript, ESLint, Prettier,
+  Vitest, CI), configuration and error codes.

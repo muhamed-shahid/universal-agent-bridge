@@ -1,5 +1,6 @@
 import type { RandomBytes } from '../core/ids.js';
 import type { Database } from '../database/index.js';
+import type { SessionContext } from '../tasks/service.js';
 import { SessionStore, sessionNotFound } from './store.js';
 import {
   SESSION_ID_PATTERN,
@@ -43,6 +44,17 @@ export class SessionAdmin {
 
   get(sessionId: string): SessionDetails {
     return this.#store.details(this.#id(sessionId));
+  }
+
+  /** Session context for operator actions on a session's tasks (local user only). */
+  context(sessionId: string): SessionContext {
+    const row = this.#store.requireRow(this.#id(sessionId));
+    return {
+      sessionId: row.id,
+      projectId: row.project_id,
+      agentId: row.agent_id,
+      status: row.status,
+    };
   }
 
   history(sessionId: string, query?: unknown): SessionEventPage {

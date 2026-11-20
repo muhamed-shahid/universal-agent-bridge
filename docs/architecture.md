@@ -1,9 +1,6 @@
 # Architecture
 
-Status: Phases 1–3. Sections marked **(planned)** describe later phases. Implemented so far:
-configuration, the SQLite database with migrations, project registration, the session
-manager (section 3.3) and agent detection (section 5), exposed through the `uab` CLI. There is
-no MCP server and no task execution yet.
+Status: 0.1.0. Everything in this document is implemented unless marked **(planned)**.
 
 Research behind these decisions: [research-and-gap-analysis.md](research-and-gap-analysis.md).
 
@@ -77,8 +74,9 @@ so a human can approve or reject tasks from a terminal while ChatGPT is waiting.
 
 ### 3.1 Entities
 
-Implemented in Phase 2 (migration 1): `projects`, `sessions`, `session_agents`,
-`session_events`, plus `schema_migrations`. The other tables are **(planned)**.
+Migration 1: `projects`, `sessions`, `session_agents`, `session_events`. Migration 2: `tasks`,
+`task_prompt_versions`, `approvals`, `executions`, `execution_output`, `execution_results`,
+`worktree_locks`, `audit_events` (append-only through triggers), and `projects.test_command`.
 
 | Table                  | Key fields                                                                                                                                                                                                                  |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -96,7 +94,7 @@ Implemented in Phase 2 (migration 1): `projects`, `sessions`, `session_agents`,
 
 No table stores provider credentials. Session tokens are stored only as SHA-256 hashes.
 
-### 3.3 Projects and sessions (implemented, Phase 2)
+### 3.3 Projects and sessions
 
 **Database.** One file, `<data dir>/uab.db`, opened with `node:sqlite`, WAL journal,
 `busy_timeout` 5 s, foreign keys on, `trusted_schema` off. Writes use `BEGIN IMMEDIATE`
@@ -125,7 +123,7 @@ Windows reserved names (`CON`, `NUL`, `COM1`…) and trailing dots or spaces on 
 the project root, which blocks symlink escapes for existing files and for paths that do not
 exist yet. Dangling links are rejected.
 
-**Sessions.** `SessionManager` serves ChatGPT (and is what the Phase 7 MCP tools will call):
+**Sessions.** `SessionManager` serves ChatGPT (the MCP tools call it):
 
 | Operation                          | Requires token | Notes                                                                       |
 | ---------------------------------- | -------------- | --------------------------------------------------------------------------- |
@@ -145,7 +143,7 @@ rotate-token`) and is not exposed over MCP. Session history (`session_events`) r
 lifecycle events only, never prompts, tokens or agent output.
 
 When another active session uses the same project directory, create and resume return a
-warning. Write locking of the working tree is enforced in Phase 6.
+warning. Only one write task may run per working tree (`worktree_locks`, `WORKTREE_BUSY`).
 
 ### 3.2 Task state machine
 
@@ -188,7 +186,7 @@ See research §5.1 for the reasoning.
   hash, then asks for confirmation.
 - Opt-in channel `chat`: MCP `approve_task` must include `promptSha256`. UAB rejects it if the
   hash does not match the current version. Documentation tells users to set
-  `tools.approve_task.approval_mode = "approve"` in the host config.
+  `tools.approve_task.approval_mode = "prompt"` in the host config.
 - Dispatch checks: approval exists, decision is `approved`, not consumed, not expired,
   `session_id`, `agent_id`, `project_path`, `prompt_version` and `prompt_sha256` all equal the
   current values, and the caller presented the session token for that session.
@@ -198,22 +196,22 @@ See research §5.1 for the reasoning.
 
 Default permission profile (applied by adapters where the CLI supports the setting):
 
-| Operation                                                    | Default                                                                                                     |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Read project files                                           | Allowed                                                                                                     |
-| Edit project source files                                    | Agent-native rules (headless CLIs deny unless the user allowlisted edits)                                   |
-| Run tests                                                    | Agent-native rules                                                                                          |
-| Install dependencies, delete files, migrations, edit `.env*` | Ask → in headless mode this means deny                                                                      |
-| Access outside the project directory                         | Deny                                                                                                        |
-| `git commit`, `git push`                                     | Deny for the agent. Git write operations are separate task kinds that need their own approval **(planned)** |
-| Production deployment                                        | Deny                                                                                                        |
+| Operation                                                    | Default                                                                                                                     |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Read project files                                           | Allowed                                                                                                                     |
+| Edit project source files                                    | Agent-native rules (headless CLIs deny unless the user allowlisted edits)                                                   |
+| Run tests                                                    | Agent-native rules                                                                                                          |
+| Install dependencies, delete files, migrations, edit `.env*` | Ask → in headless mode this means deny                                                                                      |
+| Access outside the project directory                         | Deny                                                                                                                        |
+| `git commit`, `git push`                                     | Forbidden by the rules header; UAB reports commits an agent made (`commitsCreated`). Dedicated git task kinds **(planned)** |
+| Production deployment                                        | Deny                                                                                                                        |
 
-## 5. Agent adapters (implemented in Phase 3: detection)
+## 5. Agent adapters
 
 Code: `src/agents/`. User-facing details per agent: [supported-agents.md](supported-agents.md).
 
 An agent is described by an `AgentDefinition` (`src/agents/types.ts`). Definitions are data
-plus pure parsers. They never spawn processes themselves: the registry and, from Phase 6, the
+plus pure parsers. They never spawn processes themselves: the registry and the
 execution manager do that, so timeouts, tree kill, output caps, environment filtering and
 argument checks exist once.
 
@@ -229,7 +227,7 @@ interface AgentDefinition {
   capabilities: { resume; callerChosenSessionId; structuredEvents };
   instructions: { install: string[]; authenticate: string[]; docsUrl: string };
   notes?: string[];
-  execution?: AgentExecution; // Phase 4+: buildInvocation, parseEvent, summarize
+  execution?: AgentExecution; // buildInvocation, parseStdoutLine, parseStderrLine
 }
 ```
 
@@ -239,8 +237,8 @@ Mapping from the conceptual interface in the requirements:
 | --------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `detectInstallation`, `getVersion`                              | `executableNames` + `versionProbe`, run by `AgentRegistry.status()` |
 | `checkAuthentication`                                           | `authProbe`, run by `AgentRegistry.status()`                        |
-| `startSession`, `resumeSession`, `executeTask`, `collectOutput` | `execution` (Phase 4 onwards)                                       |
-| `getExecutionStatus`, `terminateExecution`                      | execution manager (Phase 6), shared by all agents                   |
+| `startSession`, `resumeSession`, `executeTask`, `collectOutput` | `execution` adapter + execution manager                             |
+| `getExecutionStatus`, `terminateExecution`                      | execution manager, shared by all agents                             |
 | `cleanupSession`                                                | session manager                                                     |
 
 **Registry** (`src/agents/registry.ts`). Validates definitions (id format, program names,
@@ -260,7 +258,7 @@ Unreadable output is `unknown`, never `authenticated`.
 **Forbidden arguments** (`src/agents/args.ts`). `assertSafeArgs` refuses any argument list
 containing a flag from the agent's deny list, in `--flag`, `--flag=value` and `--flag value`
 forms, with optional value lists and patterns. Text after `--` is treated as prompt content.
-Phase 4+ invocations must pass this check before spawning.
+Every invocation passes this check before spawning.
 
 **Process runner** (`src/execution/process.ts`). `spawn` with `shell: false`, absolute program
 path, argument array, explicit environment, stdin for input, per-stream byte cap, timeout and
@@ -286,7 +284,7 @@ through `cmd.exe`.
 Adding an agent means adding a definition to `src/agents/adapters/` and to `BUILTIN_AGENTS`.
 No other core code changes.
 
-## 6. MCP tool catalogue (planned, Phase 7)
+## 6. MCP tool catalogue
 
 All tools validate input with Zod and return `structuredContent` plus a short text summary.
 Errors use the codes in `src/core/errors.ts`. **There is no shell, command or file-write tool.**
@@ -333,47 +331,33 @@ output. Trusted: the local user at the terminal and UAB's own configuration file
 ```
 src/
   cli.ts                 # `uab` entry point
-  core/                  # config, errors, logger, app paths (Phase 1)
-  database/              # connection, migrations (Phase 2, implemented)
-  projects/              # registration (Phase 2, implemented)
-  sessions/              # session manager and operator admin (Phase 2, implemented)
-  agents/                # definitions, registry, program resolution (Phase 3, implemented);
-                         # execution adapters (Phases 4, 8–10)
-  execution/             # process runner and child environment (Phase 3); manager (Phase 6)
-  approvals/             # approval manager (Phase 5)
-  tasks/                 # task manager (Phase 5)
-  results/               # git + test result collection (Phase 6)
-  security/              # path guard, redaction, limits (Phases 2, 6, 11)
-  audit/                 # audit writer (Phase 5)
-  mcp/                   # server, tools, schemas (Phase 7)
+  core/                  # config, errors, logger, app paths
+  database/              # connection, migrations
+  projects/              # registration, test command
+  sessions/              # session manager and operator admin
+  agents/                # definitions, registry, program resolution,
+                         # adapters/ (kiro, claude, opencode, codex)
+  execution/             # execution manager, process runner, child environment
+  tasks/                 # tasks, prompt versions, approvals, audit log
+  results/               # git and test-result collection
+  security/              # path guard, redaction
+  mcp/                   # MCP server, tools, stdio runner, config generator
 tests/
   unit/  integration/  security/  fixtures/
 ```
 
-## 9. Phase plan
+## 9. Delivery
 
-The requested order is kept. Two dependencies were confirmed during research and are already
-satisfied by that order: the approval system (5) and execution manager (6) come before the MCP
-surface (7), so no MCP path to an agent exists before approval is enforced.
-
-| Phase | Scope                                                                                                    |
-| ----- | -------------------------------------------------------------------------------------------------------- |
-| 1     | Research, architecture, foundation (this phase)                                                          |
-| 2     | SQLite connection and migrations, project registration with path validation, session manager with tokens |
-| 3     | Adapter interface, registry, detection and auth probing framework, mock CLI fixtures                     |
-| 4     | Kiro adapter (includes manual check of headless authentication)                                          |
-| 5     | Tasks, prompt versions, approvals, `uab approve` / `uab reject`, audit                                   |
-| 6     | Execution manager, locks, timeouts, output capture, redaction, result collection                         |
-| 7     | MCP server and tools, desktop config generation (`uab mcp-config`)                                       |
-| 8–10  | Claude Code, OpenCode, Codex adapters                                                                    |
-| 11    | Security hardening and full test matrix                                                                  |
-| 12    | README, docs, open-source files, PR                                                                      |
+UAB was built in twelve phases (research, database and sessions, agent registry, Kiro, approvals,
+execution, MCP, Claude Code, OpenCode, Codex, hardening, documentation). All are complete in
+0.1.0. The approval system and execution manager were built before the MCP surface, so no path
+from ChatGPT to an agent ever existed without enforced approval.
 
 ## 10. Risks
 
 | #   | Risk                                                                                               | Mitigation                                                                                                                       |
 | --- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| R1  | ChatGPT Chat mode on some Windows/Plus setups does not expose local MCP tools (openai/codex#38162) | Document the local-thread workaround; manual verification step in Phase 7; state the limitation in the README                    |
+| R1  | ChatGPT Chat mode on some Windows/Plus setups does not expose local MCP tools (openai/codex#38162) | Documented workaround (use a local thread) in the README and troubleshooting guide                                               |
 | R2  | No conversation id from the host (openai/codex#54683)                                              | Explicit session id + token binding                                                                                              |
 | R3  | Model calls `approve_task` itself                                                                  | `local` approval channel by default; `chat` channel is opt-in, hash-bound and documented as weaker                               |
 | R4  | Host restarts the MCP process and kills a running agent                                            | Mark `interrupted`, never re-run; consider a daemon later                                                                        |

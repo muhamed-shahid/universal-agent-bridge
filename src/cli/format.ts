@@ -1,5 +1,7 @@
 import type { AgentInfo, AgentStatus } from '../agents/registry.js';
+import type { TaskResult } from '../execution/manager.js';
 import type { Project } from '../projects/registry.js';
+import type { TaskDetails, TaskSummary } from '../tasks/service.js';
 import type { SessionDetails, SessionEventPage } from '../sessions/types.js';
 
 /** Human-readable CLI output. Machine-readable output uses `--json` instead. */
@@ -90,7 +92,7 @@ export function formatAgentList(agents: readonly AgentInfo[]): string {
       .map(
         (a) =>
           `${a.agentId.padEnd(9)} ${a.displayName.padEnd(12)} ${a.enabled ? 'enabled ' : 'disabled'}  ` +
-          `task execution: ${a.executionSupported ? 'available' : 'not yet (planned)'}`,
+          `task execution: ${a.executionSupported ? 'available' : 'not available'}`,
       )
       .join('\n') + '\n'
   );
@@ -131,8 +133,88 @@ export function formatAgentStatus(statuses: readonly AgentStatus[]): string {
   }
   lines.push(
     '',
-    'Task execution through UAB is not available yet in this build; this only checks detection and login.',
+    'UAB never asks for your credentials. Each CLI keeps its own login and permission settings.',
     '',
   );
+  return lines.join('\n');
+}
+
+// ------------------------------------------------------------------ tasks
+
+export function formatTaskList(tasks: readonly TaskSummary[]): string {
+  if (tasks.length === 0) return 'No tasks.\n';
+  return (
+    tasks
+      .map(
+        (t) =>
+          `${t.taskId}  ${t.status.padEnd(17)}  ${t.agentId.padEnd(8)}  ${t.kind.padEnd(9)}  ${t.title}` +
+          `\n    session ${t.sessionId}, v${String(t.version)}, ${t.updatedAt}`,
+      )
+      .join('\n') + '\n'
+  );
+}
+
+const RULE = '-'.repeat(72);
+
+/** Everything the user needs to decide, including the complete prompt and its hash. */
+export function formatApprovalRequest(t: TaskDetails): string {
+  return [
+    RULE,
+    `PENDING APPROVAL  ${t.taskId}  (version ${String(t.version)})`,
+    RULE,
+    `Title       ${t.title}`,
+    `Agent       ${t.agentId}`,
+    `Project     ${t.projectName}`,
+    `Directory   ${t.projectPath}`,
+    `Session     ${t.sessionId}`,
+    `Kind        ${t.kind} (${t.mode === 'read_only' ? 'read-only' : 'may change files in the project'})`,
+    `Agent conversation  ${t.freshAgentSession ? 'new' : "continues this session's conversation with this agent, if any"}`,
+    `Verification        ${t.verifyCommand === null ? 'none configured' : `UAB runs afterwards: ${t.verifyCommand.join(' ')}`}`,
+    t.latestDecision === null
+      ? ''
+      : `Last decision       ${t.latestDecision.decision} (v${String(t.latestDecision.promptVersion)}) ${t.latestDecision.note ?? ''}`,
+    RULE,
+    'Prompt the agent will receive (exactly):',
+    RULE,
+    t.prompt,
+    RULE,
+    `SHA-256  ${t.promptSha256}`,
+    RULE,
+    "The agent's own permission settings still apply to every file change and command.",
+    '',
+  ]
+    .filter((l) => l !== '')
+    .join('\n');
+}
+
+export function formatTaskDetails(t: TaskDetails): string {
+  return (
+    formatApprovalRequest(t).replace('PENDING APPROVAL', `TASK (${t.status})`) +
+    (t.statusNote === null ? '' : `Note: ${t.statusNote}\n`)
+  );
+}
+
+export function formatResult(r: TaskResult): string {
+  const v = r.verification;
+  const lines = [
+    `Result of ${r.taskId}: ${r.status}  (${String(Math.round(r.durationMs / 1000))} s, exit ${String(r.exitCode)})`,
+    `Agent says success:     ${r.agentReportedSuccess === null ? 'unknown' : r.agentReportedSuccess ? 'yes (not verified)' : 'no'}`,
+    `UAB verification:       ${v.status}${v.command === null ? '' : ` (${v.command.join(' ')}${v.exitCode === null ? '' : `, exit ${String(v.exitCode)}`})`}`,
+    `Permission denials:     ${String(r.permissionDenials.count)}${r.permissionDenials.tools.length > 0 ? ` (${r.permissionDenials.tools.join(', ')})` : ''}`,
+    `Changed files:          ${String(r.git.changedFiles.length)}${r.git.commitsCreated > 0 ? `, commits created: ${String(r.git.commitsCreated)}` : ''}`,
+    ...r.git.changedFiles
+      .slice(0, 30)
+      .map(
+        (f) =>
+          `    ${f.change.padEnd(8)} ${f.path}${f.preExisting ? ' (already changed before)' : ''}`,
+      ),
+    ...r.warnings.map((w) => `Warning: ${w}`),
+    ...r.errors.map((e) => `Error: ${e}`),
+    ...(r.setupHint === null ? [] : [`Hint: ${r.setupHint}`]),
+    '',
+    'Final message from the agent:',
+    r.finalMessage === '' ? '(none)' : r.finalMessage,
+    '',
+  ];
   return lines.join('\n');
 }

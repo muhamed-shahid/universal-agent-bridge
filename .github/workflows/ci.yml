@@ -27,8 +27,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
-      - run: npm test
       - run: npm run build
+      - run: npm test
       - name: Smoke test built CLI
         run: node dist/cli.js --version
       - name: Audit production dependencies

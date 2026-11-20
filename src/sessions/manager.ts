@@ -6,6 +6,7 @@ import type { RandomBytes } from '../core/ids.js';
 import { parseInput } from '../core/validation.js';
 import type { Database } from '../database/index.js';
 import type { Project, ProjectRegistry } from '../projects/registry.js';
+import type { SessionContext } from '../tasks/service.js';
 import { SessionStore, sessionNotFound, type SessionRow } from './store.js';
 import {
   hashSessionToken,
@@ -214,5 +215,21 @@ export class SessionManager {
 
   history(ref: unknown, query?: unknown): SessionEventPage {
     return this.#store.events(this.#authenticate(ref).id, query);
+  }
+
+  /**
+   * Verifies the session credentials and returns the caller's session context, for other
+   * services (tasks, results) that must enforce session ownership.
+   */
+  authenticate(ref: unknown, options: { requireActive?: boolean } = {}): SessionContext {
+    const row = this.#authenticate(ref);
+    if (options.requireActive === true) this.#requireActive(row);
+    this.#store.touch(row.id);
+    return {
+      sessionId: row.id,
+      projectId: row.project_id,
+      agentId: row.agent_id,
+      status: row.status,
+    };
   }
 }

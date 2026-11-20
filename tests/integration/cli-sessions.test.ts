@@ -139,7 +139,7 @@ describe('CLI: projects and sessions against a real database file', () => {
 
   it('db status and backup', async () => {
     const status = await uab('db', 'status', '--json');
-    expect(JSON.parse(status.out)).toMatchObject({ schemaVersion: 1, latestVersion: 1 });
+    expect(JSON.parse(status.out)).toMatchObject({ schemaVersion: 2, latestVersion: 2 });
 
     const target = path.join(sb.root, 'backup', 'uab-copy.db');
     expect((await uab('db', 'backup', target)).code).toBe(0);

@@ -15,6 +15,11 @@ export interface RunRequest {
   /** Per-stream byte cap. Extra output is discarded and `truncated` is set. */
   readonly maxOutputBytes: number;
   readonly signal?: AbortSignal;
+  /** Called with every chunk as it arrives (before capping). */
+  readonly onStdout?: (chunk: Buffer) => void;
+  readonly onStderr?: (chunk: Buffer) => void;
+  /** Called once the process has started. */
+  readonly onSpawn?: (pid: number) => void;
 }
 
 export type RunOutcome = 'exited' | 'timed_out' | 'aborted' | 'spawn_failed';
@@ -163,11 +168,16 @@ export function runProcess(req: RunRequest): Promise<RunResult> {
       req.signal?.addEventListener('abort', onAbort, { once: true });
     }
 
+    child.on('spawn', () => {
+      if (child.pid !== undefined) req.onSpawn?.(child.pid);
+    });
     child.stdout.on('data', (c: Buffer) => {
       out.push(c);
+      req.onStdout?.(c);
     });
     child.stderr.on('data', (c: Buffer) => {
       err.push(c);
+      req.onStderr?.(c);
     });
     child.on('error', (e: NodeJS.ErrnoException) => {
       outcome = 'spawn_failed';

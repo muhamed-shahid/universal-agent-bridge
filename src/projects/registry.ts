@@ -143,6 +143,38 @@ export class ProjectRegistry {
     return this.#db.all<ProjectRow>(`${SELECT} ORDER BY display_name, created_at`).map(toProject);
   }
 
+  /**
+   * Sets the command UAB runs after write tasks to verify the result independently (for example
+   * `npm test`). Arguments only, no shell. Set by the local user; never by ChatGPT.
+   */
+  setTestCommand(id: string, argv: readonly string[] | null): void {
+    if (argv !== null) {
+      if (
+        argv.length === 0 ||
+        argv.length > 32 ||
+        argv.some((a) => a.length > 512 || CONTROL_CHARS.test(a))
+      ) {
+        throw new UabError(ErrorCode.INVALID_ARGUMENT, 'Invalid test command.');
+      }
+    }
+    const changed = this.#db.run(
+      'UPDATE projects SET test_command = ?, updated_at = ? WHERE id = ?',
+      argv === null ? null : JSON.stringify(argv),
+      this.#now().toISOString(),
+      id,
+    ).changes;
+    if (changed === 0)
+      throw new UabError(ErrorCode.PROJECT_NOT_FOUND, 'Project is not registered.');
+  }
+
+  testCommand(id: string): string[] | null {
+    const row = this.#db.get<{ test_command: string | null }>(
+      'SELECT test_command FROM projects WHERE id = ?',
+      id,
+    );
+    return row?.test_command == null ? null : (JSON.parse(row.test_command) as string[]);
+  }
+
   /** Removes a registration. Refused while any session (open or closed) references it. */
   remove(id: string): void {
     this.#db.transaction(() => {

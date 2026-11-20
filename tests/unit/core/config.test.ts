@@ -22,7 +22,7 @@ describe('parseConfig', () => {
     expect(parseConfig(undefined)).toEqual({
       logLevel: 'info',
       approval: { channel: 'local', expiryMinutes: 60 },
-      execution: { timeoutMinutes: 30, maxOutputBytes: 2 * 1024 * 1024 },
+      execution: { timeoutMinutes: 30, verifyTimeoutMinutes: 10, maxOutputBytes: 2 * 1024 * 1024 },
       mcp: { maxResponseBytes: 64 * 1024 },
       projects: { allowMcpRegistration: false },
       agents: {},

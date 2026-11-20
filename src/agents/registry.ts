@@ -4,11 +4,12 @@ import { buildChildEnv, isValidEnvName } from '../execution/env.js';
 import { runProcess, type RunRequest, type RunResult } from '../execution/process.js';
 import { findForbiddenArg } from './args.js';
 import { AGENT_ID_PATTERN } from './ids.js';
-import { resolveExecutable, type ResolveResult } from './resolve.js';
+import { resolveExecutable, type ResolvedExecutable, type ResolveResult } from './resolve.js';
 import type {
   AgentCapabilities,
   AgentDefinition,
   AgentInstructions,
+  AgentSettings,
   AuthResult,
   ProbeOutput,
   ProbeSpec,
@@ -18,6 +19,9 @@ export interface AgentOverride {
   readonly enabled?: boolean | undefined;
   /** Absolute path of the CLI; skips the PATH search. */
   readonly executable?: string | undefined;
+  readonly profile?: string | undefined;
+  readonly model?: string | undefined;
+  readonly allowTools?: readonly string[] | undefined;
 }
 
 export interface AgentRegistryOptions {
@@ -171,6 +175,47 @@ export class AgentRegistry {
 
   list(): AgentInfo[] {
     return this.ids().map((id) => this.info(id));
+  }
+
+  /** User settings for task execution (profile, model, extra allow rules). */
+  settings(agentId: string): AgentSettings {
+    const o = this.#overrides[agentId] ?? {};
+    return { profile: o.profile, model: o.model, allowTools: o.allowTools };
+  }
+
+  /** The program to run for tasks. Throws when the agent is disabled or not installed. */
+  resolveProgram(agentId: string): ResolvedExecutable {
+    const def = this.definition(agentId);
+    if (!this.#enabled(agentId)) {
+      throw new UabError(ErrorCode.AGENT_NOT_FOUND, 'Unknown or disabled agent.', {
+        details: { agentId },
+      });
+    }
+    const override = this.#overrides[agentId]?.executable;
+    const resolved = resolveExecutable(def.executableNames, {
+      env: this.#env,
+      platform: this.#platform,
+      ...(override === undefined ? {} : { override }),
+    });
+    if (!resolved.ok) {
+      throw new UabError(
+        ErrorCode.AGENT_NOT_INSTALLED,
+        `${def.displayName} is not installed or cannot be run.`,
+        {
+          details: {
+            agentId,
+            problem: resolveProblem(resolved).replace('<id>', agentId),
+            install: def.instructions.install,
+          },
+        },
+      );
+    }
+    return resolved.executable;
+  }
+
+  /** Environment for the agent's processes (allowlist plus its passthrough names). */
+  childEnv(agentId: string): Record<string, string> {
+    return buildChildEnv(this.#env, this.definition(agentId).envPassthrough, this.#platform);
   }
 
   async #probe<T>(

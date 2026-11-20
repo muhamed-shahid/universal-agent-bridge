@@ -1,3 +1,7 @@
+import { claudeExecution } from './claude.js';
+import { codexExecution } from './codex.js';
+import { kiroExecution } from './kiro.js';
+import { opencodeExecution } from './opencode.js';
 import {
   parseJsonObject,
   parseSemver,
@@ -55,8 +59,10 @@ export const kiroDefinition: AgentDefinition = {
     docsUrl: 'https://kiro.dev/docs/getting-started/installation/',
   },
   notes: [
-    'Kiro documents that headless (--no-interactive) runs authenticate with KIRO_API_KEY, which needs a Pro or higher plan. Whether an interactive login is enough is verified in Phase 4.',
+    'Run `uab agents setup kiro` once to install the uab-read and uab-write Kiro profiles that limit file access to the project directory.',
+    'Verified: headless runs work with a normal `kiro-cli login`; KIRO_API_KEY is optional.',
   ],
+  execution: kiroExecution,
 };
 
 export function parseClaudeAuth(output: ProbeOutput): AuthResult {
@@ -122,6 +128,10 @@ export const claudeDefinition: AgentDefinition = {
     authenticate: ['claude auth login', 'or run `claude` once and follow the sign-in prompt'],
     docsUrl: 'https://docs.claude.com/en/docs/claude-code/setup',
   },
+  notes: [
+    'The login check reports what Claude Code has configured; it cannot tell whether the provider accepts the key. A rejected key shows up as an authentication error when a task runs.',
+  ],
+  execution: claudeExecution,
 };
 
 export function parseOpenCodeAuth(output: ProbeOutput): AuthResult {
@@ -174,7 +184,9 @@ export const opencodeDefinition: AgentDefinition = {
   },
   notes: [
     'Providers authenticated only through environment variables are reported as not authenticated.',
+    'OpenCode permissions come from your opencode config. Its default agent may edit files and run commands without asking; configure `permission` before running write tasks.',
   ],
+  execution: opencodeExecution,
 };
 
 export function parseCodexAuth(output: ProbeOutput): AuthResult {
@@ -238,8 +250,9 @@ export const codexDefinition: AgentDefinition = {
     docsUrl: 'https://learn.chatgpt.com/docs/codex/cli',
   },
   notes: [
-    'Detection follows the Codex documentation and has not been verified against a real installation yet.',
+    'Detection and execution follow the Codex documentation and have not been verified against a real installation yet.',
   ],
+  execution: codexExecution,
 };
 
 export const BUILTIN_AGENTS: readonly AgentDefinition[] = [

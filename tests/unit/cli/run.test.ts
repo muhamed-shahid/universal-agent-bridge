@@ -37,12 +37,20 @@ describe('runCli', () => {
     expect(c.err()).toBe('');
   });
 
-  it('only lists commands that exist in this phase', async () => {
+  it('lists the main commands', async () => {
     const c = capture();
     await runCli(['help'], c.io);
-    expect(c.out()).toMatch(/^\s+session create /m);
-    expect(c.out()).toMatch(/^\s+project add /m);
-    expect(c.out()).not.toMatch(/^\s+(approve|reject|mcp|dispatch)\b/m);
+    for (const cmd of [
+      'mcp',
+      'mcp-config',
+      'approve <task-id>',
+      'session create',
+      'project add',
+      'agents status',
+      'task run',
+    ]) {
+      expect(c.out()).toContain(cmd);
+    }
   });
 
   it('returns 2 for an unknown command', async () => {

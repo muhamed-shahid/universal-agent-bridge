@@ -1,11 +1,15 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveExecutable } from '../../src/agents/resolve.js';
 import {
+  parseJsonLine,
   parseJsonObject,
   parseSemver,
   safeLabel,
   type AgentDefinition,
+  type AgentEvent,
+  type AgentExecution,
   type AuthResult,
   type ProbeOutput,
 } from '../../src/agents/types.js';
@@ -103,4 +107,44 @@ export function mockDefinition(overrides: Partial<AgentDefinition> = {}): AgentD
     },
     ...overrides,
   };
+}
+
+/** Execution adapter for the mock CLI's `run` command (JSON lines on stdout). */
+export const mockExecution: AgentExecution = {
+  supported: true,
+  verified: true,
+  setupHint: 'mock setup hint',
+  buildInvocation(req) {
+    const args = ['run', '--mode', req.mode];
+    if (req.nativeSessionId !== null) args.push('--resume', req.nativeSessionId);
+    return { args, stdin: req.prompt };
+  },
+  parseStdoutLine(line): AgentEvent[] {
+    const j = parseJsonLine(line);
+    if (j === undefined) return [];
+    switch (j.type) {
+      case 'session':
+        return [{ type: 'session', nativeSessionId: String(j.id) }];
+      case 'text':
+        return [{ type: 'text', text: String(j.text) }];
+      case 'tool':
+        return [{ type: 'tool', name: String(j.name), status: 'started', path: String(j.path) }];
+      case 'denied':
+        return [{ type: 'permission_denied', tool: String(j.tool) }];
+      case 'final':
+        return [{ type: 'final', text: String(j.text), success: j.success === true }];
+      default:
+        return [];
+    }
+  },
+};
+
+export function mockAgentDefinition(): AgentDefinition {
+  return mockDefinition({ execution: mockExecution });
+}
+
+/** Directory containing git, so tests can use a real repository. */
+export function gitDir(): string | undefined {
+  const r = resolveExecutable(['git'], { env: process.env });
+  return r.ok ? path.dirname(r.executable.foundAt) : undefined;
 }

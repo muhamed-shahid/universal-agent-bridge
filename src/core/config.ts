@@ -29,6 +29,8 @@ export const configSchema = z.strictObject({
     .strictObject({
       /** Hard limit for one agent run, in minutes. */
       timeoutMinutes: z.int().min(1).max(240).default(30),
+      /** Limit for the project's verification command (`uab project set-test`), in minutes. */
+      verifyTimeoutMinutes: z.int().min(1).max(120).default(10),
       /** Maximum agent output stored per execution, in bytes. */
       maxOutputBytes: z
         .int()
@@ -69,6 +71,26 @@ export const configSchema = z.strictObject({
         enabled: z.boolean().optional(),
         /** Absolute path of the CLI program. Skips the PATH search. */
         executable: z.string().min(1).max(4096).optional(),
+        /** Native agent/profile name (Kiro and OpenCode `--agent`). */
+        profile: z
+          .string()
+          .regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/, 'must be a simple profile name')
+          .optional(),
+        /** Model name passed with `--model`. */
+        model: z
+          .string()
+          .regex(/^[A-Za-z0-9][A-Za-z0-9_.:/@[\]-]{0,127}$/, 'must be a simple model name')
+          .optional(),
+        /**
+         * Native allow rules for write tasks (Claude Code `--allowedTools`), for example
+         * `Bash(npm test:*)`. Only for agents whose CLI supports scoped rules.
+         */
+        allowTools: z
+          .array(
+            z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_*():.,/ @=-]{0,199}$/, 'must be a tool rule'),
+          )
+          .max(50)
+          .optional(),
       }),
     )
     .default({}),

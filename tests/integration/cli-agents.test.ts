@@ -66,10 +66,10 @@ describe('uab agents', () => {
     expect(r.out).toContain('UAB never asks for your credentials');
   });
 
-  it('agents list states that task execution is not available yet', async () => {
+  it('agents list shows task execution support', async () => {
     const r = await uab('agents', 'list');
     expect(r.out).toMatch(/^kiro\s+Kiro CLI/m);
-    expect(r.out).toContain('not yet (planned)');
+    expect(r.out).toMatch(/task execution: available/);
   });
 
   it('unknown agent id', async () => {

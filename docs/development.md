@@ -80,7 +80,12 @@ the data directory). `uab db backup <absolute-file>` writes a manual copy.
 4. Add parser tests with real (anonymised) output to `tests/unit/agents/`.
 5. Document it in `docs/supported-agents.md`, including the version you verified against.
 
-Task execution hooks (`execution`) are defined from Phase 4.
+The `execution` part has three pure functions: `buildInvocation` (arguments and stdin for a
+read-only or write task, optionally continuing a native session), `parseStdoutLine` and
+optionally `parseStderrLine` (turn output lines into `session`, `text`, `tool`,
+`permission_denied`, `final` and `error` events). Set `verified: false` until you have run the
+adapter against the real CLI. The execution manager does everything else: approval checks,
+spawning, timeouts, cancellation, locks, redaction, git and verification.
 
 Tests never call real coding CLIs. `tests/fixtures/mock-cli.mjs` stands in for them;
 `installMockCli()` installs it as an npm-style `.cmd` wrapper on Windows, so wrapper
