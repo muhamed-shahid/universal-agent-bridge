@@ -1,7 +1,8 @@
 # Architecture
 
-Status: Phase 1 design. Sections marked **(planned)** describe later phases. Nothing in this
-document is implemented yet except the project foundation listed in the README.
+Status: Phases 1–2. Sections marked **(planned)** describe later phases. Implemented so far:
+configuration, the SQLite database with migrations, project registration and the session
+manager (section 3.3), exposed through the `uab` CLI. There is no MCP server yet.
 
 Research behind these decisions: [research-and-gap-analysis.md](research-and-gap-analysis.md).
 
@@ -73,7 +74,10 @@ so a human can approve or reject tasks from a terminal while ChatGPT is waiting.
 
 ## 3. Domain model
 
-### 3.1 Entities (planned, Phase 2 onwards)
+### 3.1 Entities
+
+Implemented in Phase 2 (migration 1): `projects`, `sessions`, `session_agents`,
+`session_events`, plus `schema_migrations`. The other tables are **(planned)**.
 
 | Table                  | Key fields                                                                                                                                                                                                                  |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -90,6 +94,57 @@ so a human can approve or reject tasks from a terminal while ChatGPT is waiting.
 | `audit_events`         | append-only: `ts`, `actor` (`mcp`, `cli`, `system`), `action`, `session_id`, `task_id`, details (redacted)                                                                                                                  |
 
 No table stores provider credentials. Session tokens are stored only as SHA-256 hashes.
+
+### 3.3 Projects and sessions (implemented, Phase 2)
+
+**Database.** One file, `<data dir>/uab.db`, opened with `node:sqlite`, WAL journal,
+`busy_timeout` 5 s, foreign keys on, `trusted_schema` off. Writes use `BEGIN IMMEDIATE`
+transactions (nested calls use savepoints). Migrations are numbered, checksummed and applied
+one per transaction, so several UAB processes can start at once. UAB refuses to open a database
+written by a newer version (`DATABASE_TOO_NEW`) or whose applied migrations were edited
+(`DATABASE_SCHEMA_MISMATCH`). Before migrating an existing database it writes
+`uab.db.v<N>-<timestamp>.bak` with `VACUUM INTO`. On POSIX the directory is created `0700` and
+the file `0600`.
+
+**Project registration.** `uab project add <path>` accepts a directory only if it is an
+absolute path, exists, is a directory, and after `realpath` (symlinks, junctions, 8.3 names and
+letter case resolved) is not a filesystem root, not the home directory or a parent of it, and
+does not overlap the UAB data directory. UNC and device paths are rejected on Windows. The
+canonical path is stored, with a case-insensitive comparison key on Windows, so one directory
+reached by different spellings or links is one project.
+
+Over MCP, sessions can only use projects the user registered locally. The setting
+`projects.allowMcpRegistration` (default `false`) lets ChatGPT register directories itself,
+still under the same path policy.
+
+**Project-relative paths** (`src/security/paths.ts`, used by later inspection tools) reject
+absolute paths, drive letters, `..` segments, colons (NTFS streams), control characters,
+Windows reserved names (`CON`, `NUL`, `COM1`…) and trailing dots or spaces on every platform.
+`resolveInProject` then canonicalises the nearest existing ancestor and requires it to be inside
+the project root, which blocks symlink escapes for existing files and for paths that do not
+exist yet. Dangling links are rejected.
+
+**Sessions.** `SessionManager` serves ChatGPT (and is what the Phase 7 MCP tools will call):
+
+| Operation                          | Requires token | Notes                                                                       |
+| ---------------------------------- | -------------- | --------------------------------------------------------------------------- |
+| `create(project, agentId, title?)` | –              | Project and agent are explicit; returns the token once                      |
+| `list()`                           | –              | Metadata only: id, title, status, agent, project name, timestamps           |
+| `get`, `history`                   | yes            | Closed sessions remain readable                                             |
+| `resume`                           | yes            | Active sessions only; records an event                                      |
+| `switchAgent`                      | yes            | Each agent keeps its own `session_agents` row; nothing moves between agents |
+| `close`                            | yes            | Idempotent                                                                  |
+
+A wrong token, an unknown id, a malformed id and malformed credentials all return the same
+`SESSION_NOT_FOUND` error. Tokens are `uab_st_` plus 32 random bytes (base64url); only SHA-256
+hashes are stored and comparison is constant-time.
+
+`SessionAdmin` serves the local operator through the CLI (`uab session list|show|history|close|
+rotate-token`) and is not exposed over MCP. Session history (`session_events`) records
+lifecycle events only, never prompts, tokens or agent output.
+
+When another active session uses the same project directory, create and resume return a
+warning. Write locking of the working tree is enforced in Phase 6.
 
 ### 3.2 Task state machine
 
@@ -244,11 +299,11 @@ output. Trusted: the local user at the terminal and UAB's own configuration file
 
 ```
 src/
-  cli.ts                 # `uab` entry point (Phase 1: --help, --version, config)
+  cli.ts                 # `uab` entry point
   core/                  # config, errors, logger, app paths (Phase 1)
-  database/              # connection, migrations (Phase 2)
-  projects/              # registration, path validation (Phase 2)
-  sessions/              # session manager (Phase 2)
+  database/              # connection, migrations (Phase 2, implemented)
+  projects/              # registration (Phase 2, implemented)
+  sessions/              # session manager and operator admin (Phase 2, implemented)
   agents/                # adapter interface, registry (Phase 3), adapters/<name> (4, 8–10)
   approvals/             # approval manager (Phase 5)
   tasks/                 # task manager (Phase 5)

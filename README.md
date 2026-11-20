@@ -1,8 +1,9 @@
 # Universal Agent Bridge (UAB)
 
-> **Status: early development (Phase 1 of 12).** UAB cannot connect to ChatGPT or run any
-> coding agent yet. This repository currently contains the research, the architecture and the
-> project foundation. Do not install it expecting a working bridge.
+> **Status: early development (Phase 2 of 12).** UAB cannot connect to ChatGPT or run any
+> coding agent yet. What works today is the local groundwork: a database, project
+> registration and session management through the `uab` command. Do not install it expecting
+> a working bridge.
 
 UAB is a local MCP server for the **ChatGPT desktop app**. The goal is to let ChatGPT plan and
 review work while locally installed coding CLIs (Kiro CLI, Claude Code, OpenCode, Codex CLI)
@@ -12,10 +13,42 @@ do the implementation, with a human approving every task before it reaches an ag
 
 - Research and gap analysis: [docs/research-and-gap-analysis.md](docs/research-and-gap-analysis.md)
 - Architecture and phase plan: [docs/architecture.md](docs/architecture.md)
-- TypeScript project setup with linting, formatting, tests and CI
-- Core modules: configuration loading and validation, error codes, data-directory resolution,
-  a stderr logger
-- A `uab` command with `config`, `help` and `--version`
+- Developer guide: [docs/development.md](docs/development.md)
+- A local SQLite database with versioned, checksummed migrations and automatic backups
+- Project registration with path validation (absolute paths only, symlinks resolved, home
+  directory and filesystem roots refused)
+- Sessions bound to one project and one agent, protected by a per-session token
+- A `uab` command for all of the above
+
+## Trying the current build
+
+Requirements: Node.js 22.13 or later, npm.
+
+```bash
+git clone <repository-url>
+cd universal-agent-bridge
+npm install
+npm run build
+
+# Register a project directory (use your own absolute path)
+node dist/cli.js project add /absolute/path/to/your-project --name "My Project"
+
+# Create a session for it (agents: kiro, claude, opencode, codex)
+node dist/cli.js session create --project /absolute/path/to/your-project --agent kiro
+
+node dist/cli.js session list
+node dist/cli.js --help
+```
+
+On Windows use a path such as `C:\Projects\MyProject`.
+
+`session create` prints a session id and a token **once**. UAB stores only a hash of the token.
+In later phases you will give both to the one ChatGPT conversation that should use the session.
+`uab session rotate-token <id>` issues a new token and revokes the old one.
+
+UAB keeps its data in `%LOCALAPPDATA%\uab` (Windows), `~/Library/Application Support/uab`
+(macOS) or `~/.local/share/uab` (Linux). Set `UAB_HOME` to an absolute path to use another
+directory. `uab config` shows the resolved locations.
 
 ## Planned design (not implemented)
 
@@ -36,14 +69,8 @@ See [docs/architecture.md](docs/architecture.md) for details and known limitatio
 
 ## Development
 
-Requirements: Node.js 22.13 or later, npm.
-
 ```bash
-git clone <repository-url>
-cd universal-agent-bridge
-npm install
 npm run check      # typecheck, lint, format check, tests, build
-node dist/cli.js --help
 ```
 
 | Script                                                     | Purpose                      |
@@ -54,6 +81,8 @@ node dist/cli.js --help
 | `npm run format` / `format:check`                          | Prettier                     |
 | `npm test`                                                 | All tests                    |
 | `npm run test:unit` / `test:integration` / `test:security` | Test subsets                 |
+
+More in [docs/development.md](docs/development.md).
 
 ## Licence
 

@@ -3,6 +3,7 @@ import os from 'node:os';
 import { z } from 'zod';
 import { ErrorCode, UabError } from './errors.js';
 import { resolveConfigPath, resolveDataDir, type PathEnvironment } from './paths.js';
+import { formatIssues } from './validation.js';
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -46,6 +47,16 @@ export const configSchema = z.strictObject({
         .default(64 * 1024),
     })
     .prefault({}),
+  projects: z
+    .strictObject({
+      /**
+       * Whether ChatGPT may register a new project directory through create_session.
+       * Default false: the user registers directories with `uab project add`, so a
+       * conversation can never point UAB at an arbitrary local folder.
+       */
+      allowMcpRegistration: z.boolean().default(false),
+    })
+    .prefault({}),
 });
 
 export type UabConfig = z.infer<typeof configSchema>;
@@ -60,13 +71,6 @@ export interface LoadedConfig {
 
 export interface LoadConfigOptions extends Partial<PathEnvironment> {
   readonly readTextFile?: (filePath: string) => Promise<string>;
-}
-
-function formatIssues(error: z.ZodError): string[] {
-  return error.issues.map((issue) => {
-    const where = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-    return `${where}: ${issue.message}`;
-  });
 }
 
 /** Validates an already-parsed config object. Environment overrides are applied first. */

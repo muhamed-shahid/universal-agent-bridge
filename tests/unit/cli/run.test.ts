@@ -37,10 +37,12 @@ describe('runCli', () => {
     expect(c.err()).toBe('');
   });
 
-  it('only lists commands that exist', async () => {
+  it('only lists commands that exist in this phase', async () => {
     const c = capture();
     await runCli(['help'], c.io);
-    expect(c.out()).not.toMatch(/^\s+(approve|reject|mcp|session)\s/m);
+    expect(c.out()).toMatch(/^\s+session create /m);
+    expect(c.out()).toMatch(/^\s+project add /m);
+    expect(c.out()).not.toMatch(/^\s+(approve|reject|mcp|dispatch)\b/m);
   });
 
   it('returns 2 for an unknown command', async () => {

@@ -212,8 +212,10 @@ Since the server cannot identify the conversation:
    not have the token, so it cannot reach this session by accident.
 4. `list_sessions` over MCP returns metadata only (id, project name, agent, status), never
    tokens, prompts or results.
-5. To continue a session in a **new** conversation, the user runs `uab session token <id>`
-   locally and pastes the result. This is an explicit, human-initiated transfer.
+5. To continue a session in a **new** conversation, the user runs
+   `uab session rotate-token <id>` locally and pastes the new token. Only a hash is stored, so
+   the original token cannot be shown again; rotating also revokes the old conversation's
+   access. This is an explicit, human-initiated transfer.
 
 This prevents **accidental** cross-session access, which is the threat in the requirements. It
 cannot prevent a user from pasting a token into another chat on purpose, and the docs will say
