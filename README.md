@@ -1,9 +1,9 @@
 # Universal Agent Bridge (UAB)
 
-> **Status: early development (Phase 2 of 12).** UAB cannot connect to ChatGPT or run any
-> coding agent yet. What works today is the local groundwork: a database, project
-> registration and session management through the `uab` command. Do not install it expecting
-> a working bridge.
+> **Status: early development (Phase 3 of 12).** UAB cannot connect to ChatGPT or run tasks
+> with any coding agent yet. What works today is the local groundwork: a database, project
+> registration, session management and detection of installed coding CLIs, through the `uab`
+> command. Do not install it expecting a working bridge.
 
 UAB is a local MCP server for the **ChatGPT desktop app**. The goal is to let ChatGPT plan and
 review work while locally installed coding CLIs (Kiro CLI, Claude Code, OpenCode, Codex CLI)
@@ -18,6 +18,9 @@ do the implementation, with a human approving every task before it reaches an ag
 - Project registration with path validation (absolute paths only, symlinks resolved, home
   directory and filesystem roots refused)
 - Sessions bound to one project and one agent, protected by a per-session token
+- Detection of Kiro CLI, Claude Code, OpenCode and Codex CLI: installed or not, version, and
+  login status from each CLI's own status command (UAB never asks for credentials). See
+  [docs/supported-agents.md](docs/supported-agents.md)
 - A `uab` command for all of the above
 
 ## Trying the current build
@@ -37,6 +40,9 @@ node dist/cli.js project add /absolute/path/to/your-project --name "My Project"
 node dist/cli.js session create --project /absolute/path/to/your-project --agent kiro
 
 node dist/cli.js session list
+
+# See which coding CLIs are installed and logged in
+node dist/cli.js agents status
 node dist/cli.js --help
 ```
 

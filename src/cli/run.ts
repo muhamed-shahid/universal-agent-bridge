@@ -6,6 +6,8 @@ import { ErrorCode, UabError, toErrorPayload } from '../core/errors.js';
 import { VERSION } from '../core/version.js';
 import { currentSchemaVersion, MIGRATIONS } from '../database/index.js';
 import {
+  formatAgentList,
+  formatAgentStatus,
   formatHistory,
   formatProjects,
   formatSession,
@@ -36,6 +38,8 @@ Commands:
                                         Show a session's event history
   session close <session-id>            Close a session
   session rotate-token <session-id>     Issue a new token; the old one stops working
+  agents list                           List the coding agents UAB knows about
+  agents status [<agent>]               Detect installed agents, versions and login status
   db status                             Show the database file and schema version
   db backup <absolute-file>             Write a consistent copy of the database
   help                                  Show this help
@@ -45,7 +49,7 @@ Options:
   -v, --version  Show version
       --json     Machine-readable output
 
-Agents: kiro, claude, opencode, codex
+Agents: kiro (Kiro CLI), claude (Claude Code), opencode (OpenCode), codex (Codex CLI)
 
 Environment:
   UAB_HOME       Absolute path of the data directory
@@ -157,6 +161,23 @@ function runSession(app: App, args: readonly string[], values: Values): string {
   }
 }
 
+async function runAgents(app: App, args: readonly string[], values: Values): Promise<string> {
+  const [sub, arg] = args;
+  switch (sub) {
+    case 'list': {
+      const agents = app.agents.list();
+      return values.json === true ? json(agents) : formatAgentList(agents);
+    }
+    case 'status': {
+      const statuses =
+        arg === undefined ? await app.agents.statusAll() : [await app.agents.status(arg)];
+      return values.json === true ? json(statuses) : formatAgentStatus(statuses);
+    }
+    default:
+      throw usage(`Unknown agents command: ${sub ?? '(none)'}`);
+  }
+}
+
 function runDb(app: App, args: readonly string[], values: Values): string {
   const [sub, arg] = args;
   switch (sub) {
@@ -254,11 +275,11 @@ export async function runCli(
       }
       case 'project':
       case 'session':
+      case 'agents':
       case 'db': {
         app = await openApp(options);
-        const handler =
-          command === 'project' ? runProject : command === 'session' ? runSession : runDb;
-        io.stdout(handler(app, rest, values));
+        const handlers = { project: runProject, session: runSession, agents: runAgents, db: runDb };
+        io.stdout(await handlers[command](app, rest, values));
         return 0;
       }
       default:

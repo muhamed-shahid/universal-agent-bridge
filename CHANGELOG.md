@@ -6,7 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
+### Added in Phase 3
+
+- Agent definition contract (`src/agents/types.ts`) and `AgentRegistry`: detection of installed
+  coding CLIs, version, and login status from each CLI's own status command, with states
+  `ready`, `not_installed`, `not_authenticated`, `auth_unknown`, `disabled` and `error`.
+- Built-in definitions for Kiro CLI, Claude Code, OpenCode and Codex CLI (detection only),
+  with install and login guidance from each vendor's documentation.
+- Per-agent deny lists of arguments that weaken native permission checks, and
+  `assertSafeArgs` to enforce them.
+- Bounded process runner: no shell, explicit environment allowlist, stdin input, output caps,
+  timeout and abort that kill the whole process tree.
+- Windows program resolution that unwraps npm `.cmd` wrappers instead of running `cmd.exe`,
+  and ignores relative `PATH` entries.
+- CLI: `uab agents list`, `uab agents status [<agent>] [--json]`.
+- Config section `agents.<id>.enabled|executable`; sessions accept only enabled agents.
+- Error codes `AGENT_DEFINITION_INVALID`, `FORBIDDEN_AGENT_ARGUMENT`.
+- `docs/supported-agents.md`; mock CLI fixture for tests.
+
+### Added in Phase 2
 
 - Phase 2: SQLite database (`node:sqlite`, WAL) with numbered, checksummed migrations, a backup
   before each upgrade, and refusal to open newer or modified schemas.

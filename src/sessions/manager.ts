@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { AGENT_ID_PATTERN, isKnownAgentId } from '../agents/ids.js';
+import { BUILTIN_AGENTS } from '../agents/adapters/builtin.js';
+import { AGENT_ID_PATTERN } from '../agents/ids.js';
 import { ErrorCode, UabError } from '../core/errors.js';
 import type { RandomBytes } from '../core/ids.js';
 import { parseInput } from '../core/validation.js';
@@ -42,6 +43,7 @@ export interface SessionManagerDeps {
   readonly actor: Actor;
   /** Whether an MCP caller may register a new project directory. Default false. */
   readonly allowMcpRegistration?: boolean;
+  /** Whether an agent id exists and is enabled. Default: the built-in agents. */
   readonly isKnownAgent?: (agentId: string) => boolean;
   readonly now?: () => Date;
   readonly randomBytes?: RandomBytes;
@@ -73,13 +75,15 @@ export class SessionManager {
     this.#projects = deps.projects;
     this.#actor = deps.actor;
     this.#allowMcpRegistration = deps.allowMcpRegistration ?? false;
-    this.#isKnownAgent = deps.isKnownAgent ?? isKnownAgentId;
+    this.#isKnownAgent = deps.isKnownAgent ?? ((id) => BUILTIN_AGENTS.some((d) => d.id === id));
     this.#random = deps.randomBytes;
   }
 
   #requireKnownAgent(agentId: string): void {
     if (!this.#isKnownAgent(agentId)) {
-      throw new UabError(ErrorCode.AGENT_NOT_FOUND, 'Unknown agent.', { details: { agentId } });
+      throw new UabError(ErrorCode.AGENT_NOT_FOUND, 'Unknown or disabled agent.', {
+        details: { agentId },
+      });
     }
   }
 

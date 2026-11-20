@@ -1,3 +1,4 @@
+import type { AgentInfo, AgentStatus } from '../agents/registry.js';
 import type { Project } from '../projects/registry.js';
 import type { SessionDetails, SessionEventPage } from '../sessions/types.js';
 
@@ -72,4 +73,66 @@ export function formatHistory(page: SessionEventPage): string {
   });
   if (page.nextCursor !== null) lines.push(`(more: --cursor ${page.nextCursor})`);
   return (lines.length === 0 ? 'No events.' : lines.join('\n')) + '\n';
+}
+
+const STATE_LABEL: Record<AgentStatus['state'], string> = {
+  ready: 'Authenticated',
+  not_installed: 'Not installed',
+  not_authenticated: 'Not authenticated',
+  auth_unknown: 'Installed, login status unknown',
+  disabled: 'Disabled',
+  error: 'Error',
+};
+
+export function formatAgentList(agents: readonly AgentInfo[]): string {
+  return (
+    agents
+      .map(
+        (a) =>
+          `${a.agentId.padEnd(9)} ${a.displayName.padEnd(12)} ${a.enabled ? 'enabled ' : 'disabled'}  ` +
+          `task execution: ${a.executionSupported ? 'available' : 'not yet (planned)'}`,
+      )
+      .join('\n') + '\n'
+  );
+}
+
+/** Summary table followed by details and next steps for agents that are not ready. */
+export function formatAgentStatus(statuses: readonly AgentStatus[]): string {
+  const width = Math.max(...statuses.map((s) => s.displayName.length));
+  const lines = statuses.map((s) => {
+    const version = s.version === null ? '' : `  ${s.version}`;
+    const method = s.auth.method === undefined || s.state !== 'ready' ? '' : ` (${s.auth.method})`;
+    return `${s.displayName.padEnd(width)}  ${STATE_LABEL[s.state]}${method}${version}`;
+  });
+
+  for (const s of statuses) {
+    const details: string[] = [];
+    if (s.executable !== null) {
+      details.push(
+        `  Program: ${s.executable.path}${s.executable.source === 'config' ? ' (from config)' : ''}`,
+      );
+    }
+    if (s.envSet.length > 0) details.push(`  Environment variables set: ${s.envSet.join(', ')}`);
+    if (s.auth.detail !== undefined) details.push(`  ${s.auth.detail}`);
+    details.push(...s.problems.map((p) => `  ${p}`));
+    if (s.state === 'not_installed') {
+      details.push('  Install:', ...s.instructions.install.map((i) => `    ${i}`));
+      details.push(`  Docs: ${s.instructions.docsUrl}`);
+    } else if (s.state === 'not_authenticated' || s.state === 'auth_unknown') {
+      details.push(
+        '  Log in with the CLI itself (UAB never asks for your credentials):',
+        ...s.instructions.authenticate.map((i) => `    ${i}`),
+      );
+    } else if (s.state === 'disabled') {
+      details.push(`  Enable it by removing agents.${s.agentId}.enabled from the UAB config.`);
+    }
+    details.push(...s.notes.map((n) => `  Note: ${n}`));
+    lines.push('', `${s.displayName} [${s.agentId}]`, ...details);
+  }
+  lines.push(
+    '',
+    'Task execution through UAB is not available yet in this build; this only checks detection and login.',
+    '',
+  );
+  return lines.join('\n');
 }

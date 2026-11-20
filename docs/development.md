@@ -68,12 +68,30 @@ Migrations live in `src/database/migrations.ts`.
 UAB backs up an existing database before applying new migrations (`uab.db.v<N>-<time>.bak` in
 the data directory). `uab db backup <absolute-file>` writes a manual copy.
 
+## Adding a coding agent
+
+1. Add an `AgentDefinition` in `src/agents/adapters/` (see `builtin.ts` for examples) and
+   append it to `BUILTIN_AGENTS`.
+2. Probes must be read-only status commands. Their parsers must return only a state, a short
+   label and UAB-written text: never raw output, emails, account ids, URLs or keys. Unreadable
+   output must give `unknown`, never `authenticated`.
+3. List every flag that weakens the CLI's own permission checks in `forbiddenArgs`, and add
+   cases to `tests/security/agent-args.test.ts`.
+4. Add parser tests with real (anonymised) output to `tests/unit/agents/`.
+5. Document it in `docs/supported-agents.md`, including the version you verified against.
+
+Task execution hooks (`execution`) are defined from Phase 4.
+
+Tests never call real coding CLIs. `tests/fixtures/mock-cli.mjs` stands in for them;
+`installMockCli()` installs it as an npm-style `.cmd` wrapper on Windows, so wrapper
+unwrapping is exercised on every run.
+
 ## Coding rules
 
 - All SQL uses bound parameters (`db.get(sql, ...params)`). Never build SQL from input.
 - Validate untrusted input with Zod (`parseInput`) at the boundary; schemas are strict objects.
 - Expected failures throw `UabError` with a code from `src/core/errors.ts`. Codes are part of
   the public contract; do not rename them.
-- Never use `exec`/`execSync` or `shell: true` (ESLint blocks `exec`). Process creation will go
-  through the execution manager (Phase 6).
+- Never use `exec`/`execSync` or `shell: true` (ESLint blocks `exec`). Start processes only with
+  `runProcess` (`src/execution/process.ts`) and a `buildChildEnv` environment.
 - Logs go to stderr only. stdout is reserved for MCP JSON-RPC.

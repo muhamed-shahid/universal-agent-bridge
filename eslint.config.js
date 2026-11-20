@@ -41,8 +41,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Test fixtures run as plain Node scripts; TypeScript does not check them.
+    files: ['tests/fixtures/**/*.mjs'],
+    rules: { 'no-undef': 'off' },
   },
   prettier,
 );

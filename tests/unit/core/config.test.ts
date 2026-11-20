@@ -25,6 +25,7 @@ describe('parseConfig', () => {
       execution: { timeoutMinutes: 30, maxOutputBytes: 2 * 1024 * 1024 },
       mcp: { maxResponseBytes: 64 * 1024 },
       projects: { allowMcpRegistration: false },
+      agents: {},
     });
   });
 

@@ -57,6 +57,21 @@ export const configSchema = z.strictObject({
       allowMcpRegistration: z.boolean().default(false),
     })
     .prefault({}),
+  /**
+   * Per-agent settings, keyed by agent id. Example:
+   * `{ "agents": { "codex": { "enabled": false }, "claude": { "executable": "C:\\Tools\\claude.exe" } } }`
+   * Unknown agent ids are rejected when the agent registry is created.
+   */
+  agents: z
+    .record(
+      z.string().regex(/^[a-z][a-z0-9-]{1,31}$/, 'must be a lowercase agent id'),
+      z.strictObject({
+        enabled: z.boolean().optional(),
+        /** Absolute path of the CLI program. Skips the PATH search. */
+        executable: z.string().min(1).max(4096).optional(),
+      }),
+    )
+    .default({}),
 });
 
 export type UabConfig = z.infer<typeof configSchema>;

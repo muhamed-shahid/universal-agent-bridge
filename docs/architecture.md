@@ -1,8 +1,9 @@
 # Architecture
 
-Status: Phases 1–2. Sections marked **(planned)** describe later phases. Implemented so far:
-configuration, the SQLite database with migrations, project registration and the session
-manager (section 3.3), exposed through the `uab` CLI. There is no MCP server yet.
+Status: Phases 1–3. Sections marked **(planned)** describe later phases. Implemented so far:
+configuration, the SQLite database with migrations, project registration, the session
+manager (section 3.3) and agent detection (section 5), exposed through the `uab` CLI. There is
+no MCP server and no task execution yet.
 
 Research behind these decisions: [research-and-gap-analysis.md](research-and-gap-analysis.md).
 
@@ -207,51 +208,83 @@ Default permission profile (applied by adapters where the CLI supports the setti
 | `git commit`, `git push`                                     | Deny for the agent. Git write operations are separate task kinds that need their own approval **(planned)** |
 | Production deployment                                        | Deny                                                                                                        |
 
-## 5. Agent adapters
+## 5. Agent adapters (implemented in Phase 3: detection)
 
-Adapters are mostly **pure**: they describe how to call a CLI and how to read its output. The
-execution manager does all process spawning, so timeouts, kill handling, output limits and
-argument safety are implemented once.
+Code: `src/agents/`. User-facing details per agent: [supported-agents.md](supported-agents.md).
+
+An agent is described by an `AgentDefinition` (`src/agents/types.ts`). Definitions are data
+plus pure parsers. They never spawn processes themselves: the registry and, from Phase 6, the
+execution manager do that, so timeouts, tree kill, output caps, environment filtering and
+argument checks exist once.
 
 ```ts
-// Planned shape (Phase 3). Names map to the conceptual interface in the requirements.
-interface AgentAdapter {
-  readonly id: string; // 'kiro' | 'claude' | 'opencode' | 'codex' | …
-  readonly displayName: string;
-  readonly capabilities: {
-    resume: boolean; // can continue a native session
-    callerChosenSessionId: boolean; // e.g. Claude --session-id
-    structuredEvents: boolean; // JSON event stream available
-  };
-
-  detectInstallation(): Promise<Detection>; // executable path + version (getVersion)
-  checkAuthentication(): Promise<AuthStatus>; // native, non-model command only
-  buildInvocation(req: InvocationRequest): Invocation; // startSession / resumeSession / executeTask
-  parseEvent(line: string): AgentEvent | undefined; // collectOutput
-  summarize(events: AgentEvent[]): AgentRunSummary; // native session id, final message, refusals
-}
-
-interface Invocation {
-  command: string; // absolute path to a real executable, never a shell
-  args: readonly string[];
-  cwd: string; // canonical registered project path
-  stdin?: string; // prompt goes here when the CLI supports it
-  envAllowlist: readonly string[];
+interface AgentDefinition {
+  id: string; // stable public id: 'kiro' | 'claude' | 'opencode' | 'codex' | …
+  displayName: string;
+  executableNames: string[]; // looked up on PATH
+  versionProbe: { args: string[]; parse(out): string | undefined }; // getVersion
+  authProbe: { args: string[]; parse(out): AuthResult }; // checkAuthentication
+  envPassthrough: string[]; // extra env names the CLI needs for its own login
+  forbiddenArgs: ForbiddenArg[]; // flags that weaken native permissions; never passed
+  capabilities: { resume; callerChosenSessionId; structuredEvents };
+  instructions: { install: string[]; authenticate: string[]; docsUrl: string };
+  notes?: string[];
+  execution?: AgentExecution; // Phase 4+: buildInvocation, parseEvent, summarize
 }
 ```
 
-`getExecutionStatus`, `terminateExecution` and `cleanupSession` belong to the execution and
-session managers, because they are the same for every CLI.
+Mapping from the conceptual interface in the requirements:
 
-Adding an agent means adding `src/agents/adapters/<name>/` and registering it. No core change.
+| Requirement                                                     | Where it lives                                                      |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `detectInstallation`, `getVersion`                              | `executableNames` + `versionProbe`, run by `AgentRegistry.status()` |
+| `checkAuthentication`                                           | `authProbe`, run by `AgentRegistry.status()`                        |
+| `startSession`, `resumeSession`, `executeTask`, `collectOutput` | `execution` (Phase 4 onwards)                                       |
+| `getExecutionStatus`, `terminateExecution`                      | execution manager (Phase 6), shared by all agents                   |
+| `cleanupSession`                                                | session manager                                                     |
 
-### Windows process creation
+**Registry** (`src/agents/registry.ts`). Validates definitions (id format, program names,
+environment names, probes must not use forbidden flags), applies the config section
+`agents.<id>.enabled|executable`, and reports per agent: `ready`, `not_installed`,
+`not_authenticated`, `auth_unknown`, `disabled` or `error`, with version, program path,
+auth method label, the names of set passthrough variables and plain-language problems.
+Sessions accept only agent ids the registry reports as available.
 
-npm installs `claude` and `opencode` as `.cmd` / `.ps1` shims. Node refuses to spawn `.cmd`
-files without `shell: true`, and UAB never uses a shell for prompt-carrying processes. Adapters
-therefore resolve the real target (a native `.exe` or `node <script>`) during detection. Prompts
-are passed through stdin where the CLI supports it, which also avoids the Windows command-line
-length limit and argument-quoting problems.
+**Probe rules.** Probes are constant, read-only status commands (`--version`, `whoami`,
+`auth status`, `providers list`, `login status`). They run in the OS temp directory, never in a
+project, with a filtered environment, no stdin, a 15 s timeout and a 64 KB output cap. Parsers
+return only allowlisted fields: a state, a short label matching `[A-Za-z][A-Za-z0-9_.-]*`, and
+UAB-written text. Raw CLI output, emails, account ids, URLs and keys never leave the parser.
+Unreadable output is `unknown`, never `authenticated`.
+
+**Forbidden arguments** (`src/agents/args.ts`). `assertSafeArgs` refuses any argument list
+containing a flag from the agent's deny list, in `--flag`, `--flag=value` and `--flag value`
+forms, with optional value lists and patterns. Text after `--` is treated as prompt content.
+Phase 4+ invocations must pass this check before spawning.
+
+**Process runner** (`src/execution/process.ts`). `spawn` with `shell: false`, absolute program
+path, argument array, explicit environment, stdin for input, per-stream byte cap, timeout and
+abort that kill the whole tree (`taskkill /T /F` on Windows, process group on POSIX). It refuses
+relative paths, NUL bytes and, on Windows, `.cmd`/`.bat`/`.ps1`/`.js` files.
+
+**Environment** (`src/execution/env.ts`). Children get only an allowlist (PATH, home and
+app-data directories, temp, locale, proxy settings, Windows system variables) plus the
+definition's `envPassthrough` names, and `NO_COLOR=1`, `CI=1`, `TERM=dumb`. Matching is
+case-insensitive on Windows.
+
+### Windows program resolution
+
+`src/agents/resolve.ts` searches absolute PATH entries only (relative entries are ignored so a
+project folder cannot shadow a CLI) with the `.exe`, `.com`, `.cmd` and `.bat` extensions from
+PATHEXT, native programs first. npm installs CLIs as `.cmd` wrappers, which Node cannot start
+without a shell. UAB reads the wrapper (at most 64 KB) and recognises the two cmd-shim forms:
+a direct native program, or `"%_prog%" "<script>"` (run as `node <script>`). The target must
+exist inside the wrapper's own directory tree. Anything else is reported as
+`unsupported_wrapper` and the user can set `agents.<id>.executable`. UAB never runs a wrapper
+through `cmd.exe`.
+
+Adding an agent means adding a definition to `src/agents/adapters/` and to `BUILTIN_AGENTS`.
+No other core code changes.
 
 ## 6. MCP tool catalogue (planned, Phase 7)
 
@@ -304,10 +337,11 @@ src/
   database/              # connection, migrations (Phase 2, implemented)
   projects/              # registration (Phase 2, implemented)
   sessions/              # session manager and operator admin (Phase 2, implemented)
-  agents/                # adapter interface, registry (Phase 3), adapters/<name> (4, 8–10)
+  agents/                # definitions, registry, program resolution (Phase 3, implemented);
+                         # execution adapters (Phases 4, 8–10)
+  execution/             # process runner and child environment (Phase 3); manager (Phase 6)
   approvals/             # approval manager (Phase 5)
   tasks/                 # task manager (Phase 5)
-  execution/             # process runner, locks (Phase 6)
   results/               # git + test result collection (Phase 6)
   security/              # path guard, redaction, limits (Phases 2, 6, 11)
   audit/                 # audit writer (Phase 5)
