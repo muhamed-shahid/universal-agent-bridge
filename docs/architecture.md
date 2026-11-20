@@ -1,0 +1,296 @@
+# Architecture
+
+Status: Phase 1 design. Sections marked **(planned)** describe later phases. Nothing in this
+document is implemented yet except the project foundation listed in the README.
+
+Research behind these decisions: [research-and-gap-analysis.md](research-and-gap-analysis.md).
+
+## 1. Overview
+
+```mermaid
+flowchart TD
+    User((Developer))
+    subgraph Desktop["ChatGPT desktop app"]
+        Chat[ChatGPT thread<br/>runs locally]
+        Host[Codex MCP host<br/>~/.codex/config.toml]
+    end
+    subgraph UAB["Universal Agent Bridge (local process)"]
+        MCP[MCP server<br/>stdio]
+        Sess[Session manager]
+        Appr[Approval manager]
+        Tasks[Task manager]
+        Exec[Execution manager]
+        Res[Result collector]
+        Reg[Agent registry]
+        Sec[Security: paths, redaction, limits]
+        DB[(SQLite<br/>WAL)]
+        Audit[Audit log]
+    end
+    CLI[uab CLI<br/>approve / reject / sessions]
+    subgraph Agents["Coding CLIs (native auth and permissions)"]
+        Kiro[Kiro CLI]
+        Claude[Claude Code]
+        OC[OpenCode]
+        Codex[Codex CLI]
+    end
+    Repo[(Registered project directory)]
+
+    User --> Chat
+    Chat --> Host -->|stdio JSON-RPC| MCP
+    MCP --> Sess & Tasks & Appr & Res
+    User -->|out-of-band approval| CLI --> Appr
+    Tasks --> Appr
+    Tasks --> Exec --> Reg
+    Reg --> Kiro & Claude & OC & Codex
+    Kiro & Claude & OC & Codex --> Repo
+    Res --> Repo
+    Sess & Appr & Tasks & Exec & Res --> DB
+    Appr & Exec --> Audit --> DB
+    Sec -.guards.- MCP & Exec & Res
+```
+
+The ChatGPT host launches `uab mcp` as a stdio child process. UAB keeps all state in one
+SQLite database in the UAB data directory. The `uab` command-line tool opens the same database,
+so a human can approve or reject tasks from a terminal while ChatGPT is waiting.
+
+## 2. Process model
+
+- **One MCP server process per host connection.** The host may start more than one (for
+  example, after restarting the app). All processes share the database, so state is consistent.
+- **SQLite in WAL mode with `busy_timeout`** handles concurrent readers and short write
+  transactions from several processes.
+- **Agent runs are children of the MCP server process.** `dispatch_task` returns immediately;
+  the run continues in the background and writes progress to the database.
+- **Crash handling.** Each execution row stores the owning process id and a heartbeat. On
+  startup, executions whose owner is gone are marked `interrupted`. They are never restarted
+  automatically; the user must approve a new task.
+- **Working-tree lock.** A row in `worktree_locks` keyed by canonical project path. Only one
+  write-capable execution may hold it. A second dispatch on the same tree fails with
+  `WORKTREE_BUSY`. Read-only task kinds (`review`, `diagnose`) do not take the lock, but their
+  results are labelled if a writer was active at the same time.
+- **A separate long-lived daemon** was considered so that runs survive host restarts. It is
+  deferred because it adds a second local IPC surface that needs authentication. See risk R4.
+
+## 3. Domain model
+
+### 3.1 Entities (planned, Phase 2 onwards)
+
+| Table                  | Key fields                                                                                                                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects`             | `id`, `canonical_path` (unique, realpath), `display_name`, `created_at`                                                                                                                                                     |
+| `sessions`             | `id` (`UAB-…`), `token_hash`, `project_id`, `agent_id`, `native_session_id` (per agent), `status` (`active` / `closed`), `title`, timestamps                                                                                |
+| `session_agents`       | session id, agent id, native session id. Each agent keeps its own native session, so switching agents never hands one agent's conversation to another                                                                       |
+| `tasks`                | `id`, `session_id`, `agent_id`, `kind` (`implement`, `fix`, `review`, `test`, `summarize`, `diagnose`), `title`, `status`, `current_version`                                                                                |
+| `task_prompt_versions` | `task_id`, `version`, `prompt_text`, `prompt_sha256`, `created_at`, `source` (`chatgpt`)                                                                                                                                    |
+| `approvals`            | `id`, `task_id`, `session_id`, `agent_id`, `project_path`, `prompt_sha256`, `prompt_version`, `decision` (`approved` / `rejected` / `changes_requested`), `channel` (`local` / `chat`), `expires_at`, `consumed_at`, `note` |
+| `executions`           | `id`, `task_id`, `approval_id` (unique), `pid`, `owner_pid`, `heartbeat_at`, `status`, `exit_code`, `started_at`, `ended_at`                                                                                                |
+| `execution_output`     | `execution_id`, `seq`, `stream`, `chunk` (redacted before insert), bounded total size                                                                                                                                       |
+| `results`              | `execution_id`, final message, `agent_reported_status`, changed / created / deleted files, git status, diff stat, test summary, `verified` flags                                                                            |
+| `worktree_locks`       | `canonical_path` (PK), `execution_id`, `owner_pid`, `acquired_at`                                                                                                                                                           |
+| `audit_events`         | append-only: `ts`, `actor` (`mcp`, `cli`, `system`), `action`, `session_id`, `task_id`, details (redacted)                                                                                                                  |
+
+No table stores provider credentials. Session tokens are stored only as SHA-256 hashes.
+
+### 3.2 Task state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending_approval: propose_task
+    pending_approval --> pending_approval: request_prompt_changes / new version (old approval void)
+    pending_approval --> rejected: reject
+    pending_approval --> approved: approve (bound to version + hash)
+    pending_approval --> expired: approval window passed
+    approved --> expired: not dispatched before expiry
+    approved --> running: dispatch (approval consumed atomically)
+    running --> succeeded
+    running --> failed
+    running --> permission_denied: agent refused an action
+    running --> timed_out
+    running --> cancelled: cancel_task
+    running --> interrupted: UAB process died
+    rejected --> [*]
+    expired --> [*]
+    succeeded --> [*]
+    failed --> [*]
+```
+
+Rules:
+
+- No transition into `running` exists except from `approved`, and it happens in the same
+  database transaction that consumes the approval.
+- Editing the prompt creates a new version and voids any existing approval for the task.
+- Terminal states are final. A correction is a **new task** that needs fresh approval, which
+  rules out automatic correction loops.
+- Expiry only ever moves a task to `expired`. Nothing moves a task to `approved` on a timer.
+
+## 4. Approval design
+
+See research §5.1 for the reasoning.
+
+- Default channel `local`: approval only through `uab approve <task-id>` (or `uab reject`). The
+  command prints the session, project, agent, task kind, prompt version, full prompt and prompt
+  hash, then asks for confirmation.
+- Opt-in channel `chat`: MCP `approve_task` must include `promptSha256`. UAB rejects it if the
+  hash does not match the current version. Documentation tells users to set
+  `tools.approve_task.approval_mode = "approve"` in the host config.
+- Dispatch checks: approval exists, decision is `approved`, not consumed, not expired,
+  `session_id`, `agent_id`, `project_path`, `prompt_version` and `prompt_sha256` all equal the
+  current values, and the caller presented the session token for that session.
+- **Layer 2** (agent-native permissions) is untouched. UAB passes only the permission flags the
+  user configured for that agent and project, and never the dangerous flags listed in research
+  §2.1. Approval to dispatch a prompt does not grant the operations the prompt asks for.
+
+Default permission profile (applied by adapters where the CLI supports the setting):
+
+| Operation                                                    | Default                                                                                                     |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Read project files                                           | Allowed                                                                                                     |
+| Edit project source files                                    | Agent-native rules (headless CLIs deny unless the user allowlisted edits)                                   |
+| Run tests                                                    | Agent-native rules                                                                                          |
+| Install dependencies, delete files, migrations, edit `.env*` | Ask → in headless mode this means deny                                                                      |
+| Access outside the project directory                         | Deny                                                                                                        |
+| `git commit`, `git push`                                     | Deny for the agent. Git write operations are separate task kinds that need their own approval **(planned)** |
+| Production deployment                                        | Deny                                                                                                        |
+
+## 5. Agent adapters
+
+Adapters are mostly **pure**: they describe how to call a CLI and how to read its output. The
+execution manager does all process spawning, so timeouts, kill handling, output limits and
+argument safety are implemented once.
+
+```ts
+// Planned shape (Phase 3). Names map to the conceptual interface in the requirements.
+interface AgentAdapter {
+  readonly id: string; // 'kiro' | 'claude' | 'opencode' | 'codex' | …
+  readonly displayName: string;
+  readonly capabilities: {
+    resume: boolean; // can continue a native session
+    callerChosenSessionId: boolean; // e.g. Claude --session-id
+    structuredEvents: boolean; // JSON event stream available
+  };
+
+  detectInstallation(): Promise<Detection>; // executable path + version (getVersion)
+  checkAuthentication(): Promise<AuthStatus>; // native, non-model command only
+  buildInvocation(req: InvocationRequest): Invocation; // startSession / resumeSession / executeTask
+  parseEvent(line: string): AgentEvent | undefined; // collectOutput
+  summarize(events: AgentEvent[]): AgentRunSummary; // native session id, final message, refusals
+}
+
+interface Invocation {
+  command: string; // absolute path to a real executable, never a shell
+  args: readonly string[];
+  cwd: string; // canonical registered project path
+  stdin?: string; // prompt goes here when the CLI supports it
+  envAllowlist: readonly string[];
+}
+```
+
+`getExecutionStatus`, `terminateExecution` and `cleanupSession` belong to the execution and
+session managers, because they are the same for every CLI.
+
+Adding an agent means adding `src/agents/adapters/<name>/` and registering it. No core change.
+
+### Windows process creation
+
+npm installs `claude` and `opencode` as `.cmd` / `.ps1` shims. Node refuses to spawn `.cmd`
+files without `shell: true`, and UAB never uses a shell for prompt-carrying processes. Adapters
+therefore resolve the real target (a native `.exe` or `node <script>`) during detection. Prompts
+are passed through stdin where the CLI supports it, which also avoids the Windows command-line
+length limit and argument-quoting problems.
+
+## 6. MCP tool catalogue (planned, Phase 7)
+
+All tools validate input with Zod and return `structuredContent` plus a short text summary.
+Errors use the codes in `src/core/errors.ts`. **There is no shell, command or file-write tool.**
+
+| Group              | Tools                                                                                                                      | Read-only hint          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Sessions           | `create_session`, `list_sessions`, `get_session`, `resume_session`, `close_session`, `switch_agent`, `get_session_history` | only `list_*` / `get_*` |
+| Agents             | `list_agents`, `get_agent_status`, `check_agent_authentication`, `get_agent_version`                                       | yes                     |
+| Project inspection | `get_project_structure`, `get_git_status`, `get_changed_files`, `get_git_diff`                                             | yes                     |
+| Tasks              | `propose_task`, `revise_task_prompt`, `get_task`, `list_tasks`, `get_task_status`, `dispatch_task`, `cancel_task`          | only `get_*` / `list_*` |
+| Approvals          | `get_pending_approvals`, `get_approval_details`, `approve_task`, `reject_task`, `request_prompt_changes`                   | only `get_*`            |
+| Results            | `get_task_result`, `get_execution_logs`, `get_test_results`, `get_execution_summary`                                       | yes                     |
+
+Two tools are additions to the suggested list: `revise_task_prompt` (creates a new prompt
+version) and `dispatch_task` (starts an approved task). Dispatch is separate from approval so
+that out-of-band approval works: the human approves in the terminal, then ChatGPT dispatches.
+
+Large outputs are paged with `cursor` and `limit` and filtered by stream or pattern. Every
+response passes through secret redaction and a size cap.
+
+## 7. Security model
+
+Untrusted inputs: everything ChatGPT sends, project file contents, agent output and terminal
+output. Trusted: the local user at the terminal and UAB's own configuration file.
+
+| Control                        | Mechanism                                                                                                                                                                           | Phase   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Project confinement            | Paths canonicalised with `realpath`, compared case-insensitively on Windows, and required to be inside the registered root after symlink resolution                                 | 2, 11   |
+| No arbitrary filesystem access | Inspection tools accept only project-relative paths; they reject absolute paths, `..` segments, NUL bytes, device names and symlinks that leave the root                            | 2, 11   |
+| Safe process creation          | `spawn` with `shell: false`, absolute executable path, argument arrays, prompt via stdin, minimal environment allowlist                                                             | 6       |
+| Dangerous flags                | Each adapter has a deny-list test for the flags in research §2.1                                                                                                                    | 4, 8–10 |
+| Timeouts and kill              | Per-execution timeout; process-tree kill (`taskkill /T` on Windows, process group on POSIX)                                                                                         | 6       |
+| Output limits                  | Byte cap per execution and per MCP response; paging                                                                                                                                 | 6       |
+| Secret redaction               | Pattern-based redaction (API key formats, bearer tokens, private keys, `.env` values) before storage and before every response; `.env*` contents are never returned                 | 6, 11   |
+| Approval integrity             | Hash binding, versioning, single use, expiry, out-of-band default                                                                                                                   | 5       |
+| Session isolation              | Token per session, constant error for wrong id or token, per-session queries only                                                                                                   | 2       |
+| Prompt injection               | Agent output and file contents are returned as data, marked as untrusted in tool descriptions and server instructions; nothing in them can trigger an action without a new approval | 6, 7    |
+| Audit                          | Append-only audit events for every proposal, decision, dispatch, cancel and failure                                                                                                 | 5       |
+| Database                       | Stored in the user's data directory; no credentials stored; parameterised queries only                                                                                              | 2       |
+| Logging                        | Logs go to stderr only (stdout carries MCP JSON-RPC), and pass through redaction                                                                                                    | 1       |
+
+## 8. Source layout
+
+```
+src/
+  cli.ts                 # `uab` entry point (Phase 1: --help, --version, config)
+  core/                  # config, errors, logger, app paths (Phase 1)
+  database/              # connection, migrations (Phase 2)
+  projects/              # registration, path validation (Phase 2)
+  sessions/              # session manager (Phase 2)
+  agents/                # adapter interface, registry (Phase 3), adapters/<name> (4, 8–10)
+  approvals/             # approval manager (Phase 5)
+  tasks/                 # task manager (Phase 5)
+  execution/             # process runner, locks (Phase 6)
+  results/               # git + test result collection (Phase 6)
+  security/              # path guard, redaction, limits (Phases 2, 6, 11)
+  audit/                 # audit writer (Phase 5)
+  mcp/                   # server, tools, schemas (Phase 7)
+tests/
+  unit/  integration/  security/  fixtures/
+```
+
+## 9. Phase plan
+
+The requested order is kept. Two dependencies were confirmed during research and are already
+satisfied by that order: the approval system (5) and execution manager (6) come before the MCP
+surface (7), so no MCP path to an agent exists before approval is enforced.
+
+| Phase | Scope                                                                                                    |
+| ----- | -------------------------------------------------------------------------------------------------------- |
+| 1     | Research, architecture, foundation (this phase)                                                          |
+| 2     | SQLite connection and migrations, project registration with path validation, session manager with tokens |
+| 3     | Adapter interface, registry, detection and auth probing framework, mock CLI fixtures                     |
+| 4     | Kiro adapter (includes manual check of headless authentication)                                          |
+| 5     | Tasks, prompt versions, approvals, `uab approve` / `uab reject`, audit                                   |
+| 6     | Execution manager, locks, timeouts, output capture, redaction, result collection                         |
+| 7     | MCP server and tools, desktop config generation (`uab mcp-config`)                                       |
+| 8–10  | Claude Code, OpenCode, Codex adapters                                                                    |
+| 11    | Security hardening and full test matrix                                                                  |
+| 12    | README, docs, open-source files, PR                                                                      |
+
+## 10. Risks
+
+| #   | Risk                                                                                               | Mitigation                                                                                                                       |
+| --- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | ChatGPT Chat mode on some Windows/Plus setups does not expose local MCP tools (openai/codex#38162) | Document the local-thread workaround; manual verification step in Phase 7; state the limitation in the README                    |
+| R2  | No conversation id from the host (openai/codex#54683)                                              | Explicit session id + token binding                                                                                              |
+| R3  | Model calls `approve_task` itself                                                                  | `local` approval channel by default; `chat` channel is opt-in, hash-bound and documented as weaker                               |
+| R4  | Host restarts the MCP process and kills a running agent                                            | Mark `interrupted`, never re-run; consider a daemon later                                                                        |
+| R5  | Kiro headless may need `KIRO_API_KEY` (paid plans)                                                 | Detect and report clearly; user supplies it via their own environment; never stored by UAB                                       |
+| R6  | Headless CLIs deny edits unless allowlisted, so tasks "fail"                                       | Report `permission_denied` distinctly; document per-agent allowlist setup; later Layer-2 permission relay                        |
+| R7  | CLI flags and output formats change between versions                                               | Adapters record the tested version range; detection warns outside it; parsers tolerate unknown events; fixture tests per version |
+| R8  | `node:sqlite` stability across Node 22/24/26                                                       | CI matrix; `better-sqlite3` fallback behind the database module                                                                  |
+| R9  | Windows `.cmd` shims cannot be spawned without a shell                                             | Resolve real executables during detection                                                                                        |
+| R10 | Codex CLI not installed on the development machine                                                 | Codex adapter built from docs plus fixtures; marked as needing manual verification                                               |
