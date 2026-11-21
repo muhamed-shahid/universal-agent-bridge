@@ -11,7 +11,7 @@ conversation, so you stop copy-pasting prompts and terminal output between windo
 > tested against recorded or documented output, but have **not** completed a real end-to-end
 > run yet. See [Status of each agent](#status-of-each-agent) and [Roadmap](#roadmap).
 
-- [Why UAB](#why-uab)
+- [Why UAB] (#why-uab)
 - [Features](#features)
 - [How it works](#how-it-works)
 - [Prerequisites](#prerequisites)
